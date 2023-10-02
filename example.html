@@ -1,0 +1,32 @@
+<html>
+
+<head>
+	<link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
+	<script defer src="https://pyscript.net/latest/pyscript.js"></script>
+</head>
+
+<body>
+	<py-config>
+		packages = ["dist/fakegrid-0.1.0-py3-none-any.whl", "sqlalchemy", "sqlite3", "ssl"]
+	</py-config>
+	<py-script>
+		import fakegrid
+		import sqlite3
+		from fakegrid.fakegrid import Fakegrid
+		from sqlalchemy import create_engine
+		from pathlib import Path
+		schema_file = Path(fakegrid.__file__).parent / "demo" / "schema.pickle"
+		sqlite_file = Path(fakegrid.__file__).parent / "demo" / "demo.sqlite"
+		assert sqlite_file.exists()
+
+		schema = fakegrid.ShotgridSchema.from_file(schema_file)
+		engine = create_engine(f"sqlite:////{sqlite_file}")
+		sg = Fakegrid.from_schema(schema, engine)
+
+
+	</py-script>
+	<py-repl auto-generate="true">sg.find("Version", [["sg_status_list", "is", "apr"]], ["code",
+		"created_at","entity"])</py-repl>
+</body>
+
+</html>
