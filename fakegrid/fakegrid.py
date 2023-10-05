@@ -19,6 +19,7 @@ from sqlalchemy import (
     or_,
     select,
 )
+from shotgun_api3 import Fault
 from sqlalchemy.sql import functions
 from sqlalchemy.orm import Session, load_only, aliased
 
@@ -568,6 +569,12 @@ class Fakegrid:
                 actual_schema.connection_entity[0].api_name
             ]
 
+            if isinstance(value[0], list) and operator in ["is", "is_not"]:
+                raise Fault(
+                    f"API read() '{operator}' 'relation' expects a 1-element array:\n"
+                    f"{value[0]}"
+                )
+
             if operator == "is":
                 return and_(
                     id_field == value[0]["id"],
@@ -625,8 +632,9 @@ class Fakegrid:
                     .select_from(raw_connection_model)
                     .where(
                         and_(
-                            getattr(raw_connection_model, f"{field_schema.api_name}_name").
-                            like(f"%{value[0]}%"),
+                            getattr(
+                                raw_connection_model, f"{field_schema.api_name}_name"
+                            ).like(f"%{value[0]}%"),
                             getattr(raw_connection_model, f"{connection_field}_id")
                             == getattr(parent_model, "id"),
                             getattr(raw_connection_model, f"{connection_field}_type")
@@ -645,7 +653,7 @@ class Fakegrid:
                             id_field == i["id"],
                             type_field == i["type"],
                         )
-                        for i in value
+                        for i in value[0]
                     ]
                 )
             elif operator == "not_in":
@@ -657,12 +665,18 @@ class Fakegrid:
                             or_(
                                 *[
                                     and_(
-                                        getattr(raw_connection_model, f"{field_schema.api_name}_id")
+                                        getattr(
+                                            raw_connection_model,
+                                            f"{field_schema.api_name}_id",
+                                        )
                                         == i["id"],
-                                        getattr(raw_connection_model, f"{field_schema.api_name}_type")
+                                        getattr(
+                                            raw_connection_model,
+                                            f"{field_schema.api_name}_type",
+                                        )
                                         == i["type"],
                                     )
-                                    for i in value
+                                    for i in value[0]
                                 ]
                             ),
                             getattr(raw_connection_model, f"{connection_field}_id")
@@ -671,10 +685,9 @@ class Fakegrid:
                             == parent_model._entity.api_name,
                             getattr(raw_connection_model, "is_retired") == False,
                         )
-                    ).exists()
+                    )
+                    .exists()
                 )
-            
-            
 
         else:
             if operator == "is":
@@ -698,7 +711,9 @@ class Fakegrid:
             elif operator == "not_between":
                 return field.notbetween(value[0], value[1])
             elif operator == "in":
-                return field.in_(value)
+                return or_(*[field == i for i in value[0]])
+            elif operator == "not_in":
+                return and_(*[field != i for i in value[0]])
             else:
                 raise NotImplementedError(f"Unsupported operator: {operator}")
 

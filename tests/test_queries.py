@@ -452,5 +452,11 @@ def sg():
 def test_queries(entity_type, filters, fields, sg):
     key = "{} {} {}".format(entity_type, filters, fields)
     expected_result = expected_results[key]
-    our_result = sg.find(entity_type, filters, fields)
-    assert our_result == expected_result
+    try:
+        our_result = sg.find(entity_type, filters, fields)
+    except Exception as e:
+        our_result = e
+    if isinstance(expected_result, Exception):
+        assert type(our_result) == type(expected_result)
+    else:
+        assert our_result == expected_result

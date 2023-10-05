@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from typing_extensions import Self
 from enum import Enum
 import re
+import requests
 
 import shotgun_api3
 
@@ -500,7 +501,6 @@ class ShotgridSchema:
         fields: Dict[str, Dict[str, Dict[str, Any]]] = sg.schema_read()  # type: ignore
 
         schema = cls(entities={})
-
         for entity_name, raw_fields in fields.items():
             shotgrid_fields: Dict[str, ShotgridField] = {}
             schema.entities[entity_name] = entity = ShotgridEntity(
@@ -526,8 +526,15 @@ class ShotgridSchema:
                     )
                     continue
 
-        cls._resolve_reverses(schema, sg)
+        # get the schema that the shotgrid website uses,
+        # hopefully we can one day access this directly from the python api,
+        # but right now this is the only place to get reverse fields
+        js_schema = requests.get(
+            f"{sg.base_url}/page/reload_schema",
+            cookies={"_session_id": sg.get_session_token()},
+        ).json()
 
+        cls._resolve_reverses(schema, js_schema)
         cls._resolve_connections(schema)
 
         for _, entity in schema.entities.items():
@@ -559,359 +566,184 @@ class ShotgridSchema:
 
     @classmethod
     def _resolve_connections(cls, schema: Self) -> None:
-        # first, lets get defaults
-        for entity, connections in DEFAULT_CONNECTIONS.items():
-            if entity not in schema.entities:
-                continue
-            for _field, (
-                connection_entity_name,
-                connection_field_name,
-            ) in connections.items():
-                if (
-                    connection_entity_name not in schema.entities
-                    or _field not in schema.entities[entity].fields
-                ):
-                    continue
-                try:
-                    connection_entity = schema.entities[connection_entity_name]
-                    connection_field = connection_entity.fields[connection_field_name]
-                    connection_field.one_sided = True
-
-                    schema.entities[entity].fields[_field].connection_entity = (
-                        connection_entity,
-                        connection_field_name,
-                    )
-
-                except KeyError as e:
-                    print(e)
-                    print(
-                        f"Warning: Connection {entity}.{_field} -> "
-                        f"{connection_entity_name}.{connection_field_name} "
-                        "could not be resolved, skipping."
-                    )
-                    continue
-
-        # now lets resolve existing connection tables
-        for _, entity in schema.entities.items():
-            if not entity.api_name.endswith("Connection"):
-                continue
-
-            dynamic_name = re.search(r"(\w+)_(sg_\w+)_Connection", entity.api_name)
-            if not dynamic_name:
-                continue
-
-            parent_entity_type = dynamic_name[1]
-            parent_field_name = dynamic_name[2]
-            parent_key = snake_case(parent_entity_type)
-            is_source_dest = False
-            if parent_key not in entity.fields:
-                if f"source_{parent_key}" in entity.fields:
-                    parent_key = f"source_{parent_key}"
-                    is_source_dest = True
-
-            try:
-                parent_entity = schema.entities[parent_entity_type]
-                parent_field = parent_entity.fields[parent_field_name]
-                parent_key_field = entity.fields[parent_key]
-                parent_key_field.one_sided = True
-                parent_field.connection_entity = (entity, parent_key)
-                reverse_fields = parent_field.parent_of
-                if not reverse_fields:
-                    continue
-                for reverse_field in reverse_fields:
-                    reverse_key = snake_case(reverse_field.entity.api_name)
-                    if is_source_dest:
-                        reverse_key = f"dest_{reverse_key}"
-                    reverse_key_field = entity.fields[reverse_key]
-                    reverse_key_field.one_sided = True
-                    reverse_field.connection_entity = (entity, reverse_key)
-            except KeyError:
-                print(
-                    f"Warning: Connection {entity.api_name} could not "
-                    "be resolved, skipping."
-                )
-                continue
-
-        # now lets make fake connection entities for all other multi-entity links
-        for _, entity in list(schema.entities.items()):
+        for entity in list(schema.entities.values()):
             if entity.api_name.endswith("Connection"):
                 continue
-            for _, _field in entity.fields.items():
-                if _field.field_type != FieldType.MultiEntity:
+            for field in entity.fields.values():  # noqa
+                if field.field_type != FieldType.MultiEntity:
                     continue
-                if _field.connection_entity:
+                if field.connection_entity:
                     continue
-                if _field.reverse_of:
+                real_connection_entity = next(
+                    (
+                        e
+                        for e in schema.entities.values()
+                        if e.api_name.endswith("Connection")
+                        and any(f.reverse_of == field for f in e.fields.values())
+                    ),
+                    None,
+                )
+                if real_connection_entity:
+                    connection_field = next(
+                        (
+                            f
+                            for f in real_connection_entity.fields.values()
+                            if f.reverse_of == field
+                        ),
+                    )
+                    field.connection_entity = (
+                        real_connection_entity,
+                        connection_field.api_name,
+                    )
                     continue
+                else:
+                    # Lets make a fake connection entity!
 
-                connection_entity_name = (
-                    f"fakegrid_{entity.api_name}_{_field.api_name}_Connection"
-                )
-                connection_entity = ShotgridEntity(
-                    schema=schema,
-                    api_name=connection_entity_name,
-                    display_name=connection_entity_name,
-                    fields={},
-                    real=False,
-                )
-                # id field
-                connection_entity.fields["id"] = ShotgridField(
-                    entity=connection_entity,
-                    api_name="id",
-                    display_name="id",
-                    field_type=FieldType.Number,
-                    properties={
-                        "name": {"value": "id"},
-                        "data_type": {"value": "number"},
-                        "properties": {},
-                    },
-                )
-                # parent field
-                parent_api_name = snake_case(entity.api_name)
-                is_source_dest = False
-                if entity.api_name in _field.properties["properties"]["valid_types"]:
-                    is_source_dest = True
-                    parent_api_name = f"source_{parent_api_name}"
-
-                connection_entity.fields[parent_api_name] = ShotgridField(
-                    entity=connection_entity,
-                    api_name=parent_api_name,
-                    display_name=entity.display_name,
-                    field_type=FieldType.Entity,
-                    properties={
-                        "name": {"value": entity.display_name},
-                        "data_type": {"value": "entity"},
-                        "properties": {
-                            "valid_types": {"value": [entity.api_name]},
-                            "connection": {"value": "parent"},
+                    connection_entity_name = (
+                        f"fakegrid_{entity.api_name}_{field.api_name}_Connection"
+                    )
+                    connection_entity = ShotgridEntity(
+                        schema=schema,
+                        api_name=connection_entity_name,
+                        display_name=connection_entity_name,
+                        fields={},
+                        real=False,
+                    )
+                    # id field
+                    connection_entity.fields["id"] = ShotgridField(
+                        entity=connection_entity,
+                        api_name="id",
+                        display_name="id",
+                        field_type=FieldType.Number,
+                        properties={
+                            "name": {"value": "id"},
+                            "data_type": {"value": "number"},
+                            "properties": {},
                         },
-                    },
-                    one_sided=True,
-                )
-                _field.connection_entity = (
-                    connection_entity,
-                    parent_api_name,
-                )
+                    )
+                    # parent field
+                    parent_api_name = snake_case(entity.api_name)
+                    if entity.api_name in field.properties["properties"]["valid_types"]:
+                        parent_api_name = f"source_{parent_api_name}"
 
-                # make a single child field for all valid types
-                entity_api_name = "linked_entity"
-                child_field_key_field = ShotgridField(
-                    entity=connection_entity,
-                    api_name=entity_api_name,
-                    display_name=entity_api_name,
-                    field_type=FieldType.Entity,
-                    properties={
-                        "name": {"value": entity_api_name},
-                        "data_type": {"value": "entity"},
-                        "properties": {
-                            "valid_types": {
-                                "value": _field.properties["properties"]["valid_types"][
-                                    "value"
-                                ]
+                    connection_entity.fields[parent_api_name] = ShotgridField(
+                        entity=connection_entity,
+                        api_name=parent_api_name,
+                        display_name=entity.display_name,
+                        field_type=FieldType.Entity,
+                        properties={
+                            "name": {"value": entity.display_name},
+                            "data_type": {"value": "entity"},
+                            "properties": {
+                                "valid_types": {"value": [entity.api_name]},
+                                "connection": {"value": "parent"},
                             },
-                            "connection": {"value": "child"},
                         },
-                    },
-                    one_sided=True,
-                )
-                connection_entity.fields[entity_api_name] = child_field_key_field
+                        one_sided=True,
+                    )
+                    field.connection_entity = (
+                        connection_entity,
+                        parent_api_name,
+                    )
 
-                for child_field in _field.parent_of or []:
-                    child_field.connection_entity = (connection_entity, entity_api_name)
+                    # make a single child field for all valid types
+                    entity_api_name = "linked_entity"
+                    child_field_key_field = ShotgridField(
+                        entity=connection_entity,
+                        api_name=entity_api_name,
+                        display_name=entity_api_name,
+                        field_type=FieldType.Entity,
+                        properties={
+                            "name": {"value": entity_api_name},
+                            "data_type": {"value": "entity"},
+                            "properties": {
+                                "valid_types": {
+                                    "value": field.properties["properties"][
+                                        "valid_types"
+                                    ]["value"]
+                                },
+                                "connection": {"value": "child"},
+                            },
+                        },
+                        one_sided=True,
+                    )
+                    connection_entity.fields[entity_api_name] = child_field_key_field
 
-                schema.entities[connection_entity_name] = connection_entity
+                    for child_field in field.parent_of or []:
+                        child_field.connection_entity = (
+                            connection_entity,
+                            entity_api_name,
+                        )
+
+                    schema.entities[connection_entity_name] = connection_entity
 
     @classmethod
-    def _resolve_reverses(cls, schema: Self, sg: shotgun_api3.Shotgun) -> None:
+    def _resolve_reverses(cls, schema: Self, js_schema: dict) -> None:
         """Identifies reverse fields and updates metadata to reflect these."""
-
-        # naming convention of multi_entity reverse fields, auto-generated by shotgun
-        # e.g. "Version.sg_tasks" -> "Task.version_sg_tasks_versions"
-
-        entity_reverse_regex = r"^sg_({fields})s(_\d+){{0,1}}$".format(
-            fields="|".join([snake_case(e) for e in schema.entities])
-        )
 
         cls._resolve_builtin_reverses(schema)
 
-        # first, lets get all the reverse fields of multi_entity fields
-        # since these are the easiest to identify
-        cls._resolve_multi_entity_reverses(schema)
-
-        # in order to best identify the reverse fields of entity fields,
-        # (there's no *good* way), we're going to rely on the display names of fields,
-        # since those are automatically generated by shotgun. The problem is that
-        # if you rename a field, this breaks. First lets try to identify them based on
-        # the display name of the field, but if we still have ambiguity, we'll need
-        # to get all of the event logs for field display name changes and trace back to
-        # the *original* display name and try again.
-        # this sucks, but shotgun doesn't currently give us reverses in the schema :(
-
-        unsolved_reverses: List[ShotgridField] = []
-        for _, entity in schema.entities.items():
-            for _, _field in entity.fields.items():
-                if _field.field_type != FieldType.MultiEntity:
-                    continue
-                if _field.reverse_of or _field.parent_of or _field.one_sided:
-                    continue
-                if not re.match(entity_reverse_regex, _field.api_name):
-                    continue
-                unsolved_reverses.append(_field)
-
-        if unsolved_reverses:
-            cls._resolve_entity_reverses(unsolved_reverses)
-
-        unsolved_reverses = [
-            f
-            for f in unsolved_reverses
-            if not f.reverse_of and not f.parent_of and not f.one_sided
-        ]
-
-        if not unsolved_reverses:
-            return
-
-        print(
-            "Warning, some reverse fields could not be identified, "
-            "scanning event logs for column rename events to help... "
-            "this may take a while depending on how old your site is."
-        )
-        column_rename_events: List[dict] = sg.find(  # type: ignore
-            "EventLogEntry",
-            [
-                ["event_type", "is", "Shotgun_DisplayColumn_Change"],
-                ["attribute_name", "is", "human_name"],
-            ],
-            [
-                "meta",
-                "entity",
-                "entity.DisplayColumn.entity_type",
-            ],
-        )
-        assert column_rename_events
-
-        cls._resolve_entity_reverses(unsolved_reverses, column_rename_events)
-
-        unsolved_reverses = []
-        for entity in schema.entities.values():
-            if entity.api_name.endswith("Connection"):
+        for entity, fields in js_schema["schema"]["entity_fields"].items():
+            if entity not in schema.entities:
                 continue
-            for _field in entity.fields.values():
-                if _field.field_type not in [FieldType.MultiEntity, FieldType.Entity]:
+            for field_name, field_properties in fields.items():
+                fakegrid_field = schema.entities[entity].fields.get(field_name)
+                if not fakegrid_field:
                     continue
-                if (
-                    not _field.reverse_of
-                    and not _field.parent_of
-                    and not _field.one_sided
-                ):
-                    unsolved_reverses.append(_field)
+                reverse_of = field_properties.get("reverse_of")
+                inverse_association = field_properties.get("inverse_association")
+                if entity == "Shot" and field_name == "assets":
+                    print(entity, field_name, reverse_of, inverse_association)
 
-    @classmethod
-    def _resolve_multi_entity_reverses(cls, schema: Self) -> None:
-        multi_entity_reverse_regex = r"^({entities})_(.+)_({entities})s$".format(
-            entities="|".join([snake_case(e) for e in schema.entities])
-        )
-        for _, entity in schema.entities.items():
-            for _, _field in entity.fields.items():
-                if _field.field_type != FieldType.MultiEntity:
+                if not reverse_of and not inverse_association:
                     continue
-                if _field.api_name == "asset_linked_projects_assets":
-                    print("debug")
-                match = re.match(multi_entity_reverse_regex, _field.api_name)
-                if not match:
-                    continue
-
-                parent_entity_type = camel_case(match[1])
-                parent_field_name = match[2]
-                try:
-                    parent_field = schema.entities[parent_entity_type].fields[
-                        parent_field_name
+                if reverse_of:
+                    reverse_entity_name = reverse_of["entity_type_name"]
+                    reverse_field_name = reverse_of["name"]
+                    if reverse_entity_name not in schema.entities:
+                        continue
+                    if (
+                        reverse_field_name
+                        not in schema.entities[reverse_entity_name].fields
+                    ):
+                        continue
+                    reverse_field = schema.entities[reverse_entity_name].fields[
+                        reverse_field_name
                     ]
-                except KeyError:
-                    raise KeyError(
-                        f"Field {parent_entity_type}.{parent_field_name} not found, "
-                        "but is expected to be the parent of "
-                        f"{entity.api_name}.{_field.api_name}"
-                    )
 
-                _field.reverse_of = parent_field
-                if parent_field.parent_of:
-                    parent_field.parent_of.append(_field)
                 else:
-                    parent_field.parent_of = [_field]
-
-    @classmethod
-    def _resolve_entity_reverses(
-        cls,
-        fields: List[ShotgridField],
-        column_rename_events: Optional[List[Dict[str, Any]]] = None,
-    ):
-        column_original_display_names: Dict[str, str] = {}
-        for event in sorted(column_rename_events or [], key=lambda x: x["id"]):
-            if isinstance(event["meta"], list) or not event["entity"]:
-                continue
-            entity_type = event["entity.DisplayColumn.entity_type"]
-            api_name = event["entity"]["name"]
-            field_name = f"{entity_type}.{api_name}"
-            if field_name not in column_original_display_names:
-                old_Value = event["meta"]["old_value"]
-                column_original_display_names[field_name] = old_Value
-
-        for _field in fields:
-            original_display_name = column_original_display_names.get(
-                f"{_field.entity.api_name}.{_field.api_name}", _field.display_name
-            )
-            if "<->" not in original_display_name:
-                continue
-            parent_entity_type, parent_field_display_name = original_display_name.split(
-                " <-> "
-            )
-            parent_entity_type = next(
-                iter(
-                    e.api_name
-                    for e in _field.entity.schema.entities.values()
-                    if e.display_name == parent_entity_type
-                ),
-                None,
-            )
-            if not parent_entity_type:
-                continue
-
-            matching_field = next(
-                iter(
-                    f
-                    for f in _field.entity.schema.entities[
-                        parent_entity_type
-                    ].fields.values()
-                    if column_original_display_names.get(
-                        f"{f.entity.api_name}.{f.api_name}", f.display_name
+                    if isinstance(inverse_association, list):
+                        continue
+                    reverse_entity_name, reverse_field_name = inverse_association.split(
+                        "."
                     )
-                    == parent_field_display_name
-                    and f.field_type == FieldType.Entity
-                ),
-                None,
-            )
-            if not matching_field:
-                # try to see if there's only one possible reverse anyway...
-                matching_fields = [
-                    f
-                    for f in _field.entity.schema.entities[
-                        parent_entity_type
-                    ].fields.values()
-                    if f.field_type == FieldType.Entity
-                    and _field.entity.api_name
-                    in f.properties["properties"]["valid_types"]["value"]
-                    and ((not f.reverse_of) and (not f.parent_of) and not (f.one_sided))
-                ]
-                if len(matching_fields) == 1:
-                    matching_field = matching_fields[0]
-                else:
-                    continue
+                    connection_entity_name = field_properties.get(
+                        "through_join_entity_type"
+                    )
+                    if (
+                        connection_entity_name
+                        and connection_entity_name in schema.entities
+                    ):
+                        # we have a connection entity defined, check if this field is the "child" field
+                        if connection_entity_name.startswith(entity):
+                            continue
 
-            _field.reverse_of = matching_field
-            if isinstance(matching_field.parent_of, list):
-                matching_field.parent_of.append(_field)
-            else:
-                matching_field.parent_of = [_field]
+                    if reverse_entity_name not in schema.entities:
+                        continue
+                    if (
+                        reverse_field_name
+                        not in schema.entities[reverse_entity_name].fields
+                    ):
+                        continue
+                    reverse_field = schema.entities[reverse_entity_name].fields[
+                        reverse_field_name
+                    ]
+
+                fakegrid_field.reverse_of = reverse_field
+                if reverse_field.parent_of:
+                    reverse_field.parent_of.append(fakegrid_field)
+                else:
+                    reverse_field.parent_of = [fakegrid_field]
 
     @classmethod
     def _resolve_builtin_reverses(cls, schema: Self) -> None:

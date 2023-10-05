@@ -51,7 +51,7 @@ FIELD_TYPES_TO_SQL_ALCHEMY_TYPES = {
     FieldType.Checkbox: Boolean,
     FieldType.Color: String,
     FieldType.Currency: Float,
-    FieldType.Date: Date,
+    FieldType.Date: String,
     FieldType.DateTime: DateTime,
     FieldType.Duration: Integer,
     FieldType.Entity: None,
