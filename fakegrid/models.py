@@ -43,7 +43,7 @@ from sqlalchemy import (
 INDEX_FIELDS = ["code", "id", "name", "type", "sg_status_list"]
 
 FIELD_TYPES_TO_SQL_ALCHEMY_TYPES = {
-    FieldType.Text: Text,
+    FieldType.Text: Text(collation="NOCASE"),
     FieldType.Float: Float,
     FieldType.MultiEntity: None,
     FieldType.Number: Integer,
@@ -57,7 +57,7 @@ FIELD_TYPES_TO_SQL_ALCHEMY_TYPES = {
     FieldType.Entity: None,
     FieldType.Footage: String,
     FieldType.Image: String,
-    FieldType.List: String,
+    FieldType.List: String(255, collation="NOCASE"),
     FieldType.Password: String,
     FieldType.Percent: Integer,
     FieldType.Serializable: Text,
@@ -198,7 +198,7 @@ def schema_to_models(schema: ShotgridSchema) -> Dict[str, Type[Base]]:
             attributes[
                 field.api_name if field.api_name != "metadata" else "_metadata"
             ] = mapped_column(
-                sql_type(),
+                sql_type() if isinstance(sql_type, type) else sql_type,
                 name=field.api_name,
                 nullable=not required,
                 index=indexed,
@@ -213,14 +213,14 @@ def schema_to_models(schema: ShotgridSchema) -> Dict[str, Type[Base]]:
                 )
                 type_field_name = f"{field.api_name}_type"
                 attributes[type_field_name] = mapped_column(
-                    String(),
+                    String(100),
                     name=type_field_name,
                     nullable=True,
                     index=True,
                 )
                 name_field_name = f"{field.api_name}_name"
                 attributes[name_field_name] = mapped_column(
-                    String(),
+                    String(255, collation="NOCASE"),
                     name=name_field_name,
                     nullable=True,
                     index=False,

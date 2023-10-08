@@ -371,6 +371,316 @@ class FieldType(Enum):
     Calculated = "calculated"
 
 
+"""addressing                  'is'
+                            'is_not'
+                            'contains'
+                            'not_contains'
+                            'in'
+                            'type_is'
+                            'type_is_not'
+                            'name_contains'
+                            'name_not_contains'
+                            'name_starts_with'
+                            'name_ends_with'
+
+checkbox                    'is'
+                            'is_not'
+
+currency                    'is'
+                            'is_not'
+                            'less_than'
+                            'greater_than'
+                            'between'
+                            'not_between'
+                            'in'
+                            'not_in'
+
+date                        'is'
+                            'is_not'
+                            'greater_than'
+                            'less_than'
+                            'in_last'
+                            'not_in_last'
+                            'in_next'
+                            'not_in_next'
+                            'in_calendar_day'
+                            'in_calendar_week'
+                            'in_calendar_month'
+                            'in_calendar_year'
+                            'between'
+                            'in'
+                            'not_in'
+
+date_time                   'is'
+                            'is_not'
+                            'greater_than'
+                            'less_than'
+                            'in_last'
+                            'not_in_last'
+                            'in_next'
+                            'not_in_next'
+                            'in_calendar_day'
+                            'in_calendar_week'
+                            'in_calendar_month'
+                            'in_calendar_year'
+                            'between'
+                            'in'
+                            'not_in'
+
+duration                    'is'
+                            'is_not'
+                            'greater_than'
+                            'less_than'
+                            'between'
+                            'in'
+                            'not_in'
+
+entity                      'is'
+                            'is_not'
+                            'type_is'
+                            'type_is_not'
+                            'name_contains'
+                            'name_not_contains'
+                            'name_is'
+                            'in'
+                            'not_in'
+
+float                       'is'
+                            'is_not'
+                            'greater_than'
+                            'less_than'
+                            'between'
+                            'in'
+                            'not_in'
+
+image                       'is' ** Note: For both 'is' and 'is_not', the only supported value is None,
+                            'is_not' **  which supports detecting the presence or lack of a thumbnail.
+
+list                        'is'
+                            'is_not'
+                            'in'
+                            'not_in'
+
+multi_entity                'is' ** Note:  when used on multi_entity, this functions as
+                                            you would expect 'contains' to function
+                            'is_not'
+                            'type_is'
+                            'type_is_not'
+                            'name_contains'
+                            'name_not_contains'
+                            'in'
+                            'not_in'
+
+number                      'is'
+                            'is_not'
+                            'less_than'
+                            'greater_than'
+                            'between'
+                            'not_between'
+                            'in'
+                            'not_in'
+
+password                    ** Filtering by this data type field not supported
+
+percent                     'is'
+                            'is_not'
+                            'greater_than'
+                            'less_than'
+                            'between'
+                            'in'
+                            'not_in'
+
+serializable                ** Filtering by this data type field not supported
+
+status_list                 'is'
+                            'is_not'
+                            'in'
+                            'not_in'
+
+summary                     ** Filtering by this data type field not supported
+
+
+tag_list                    'is'  ** Note:  when used on tag_list, this functions as
+                                            you would expect 'contains' to function
+                            'is_not'
+                            'name_contains'
+                            'name_not_contains'
+                            'name_id'
+
+text                        'is'
+                            'is_not'
+                            'contains'
+                            'not_contains'
+                            'starts_with'
+                            'ends_with'
+                            'in'
+                            'not_in'
+
+
+timecode                    'is'
+                            'is_not'
+                            'greater_than'
+                            'less_than'
+                            'between'
+                            'in'
+                            'not_in'"""
+
+ALLOWED_OPERATIONS_BY_FIELD_TYPE = {
+    FieldType.Text: [
+        "is",
+        "is_not",
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "in",
+        "not_in",
+    ],
+    FieldType.Float: [
+        "is",
+        "is_not",
+        "greater_than",
+        "less_than",
+        "between",
+        "in",
+        "not_in",
+    ],
+    FieldType.MultiEntity: [
+        "is",
+        "is_not",
+        "type_is",
+        "type_is_not",
+        "name_contains",
+        "name_not_contains",
+        "name_is",
+        "in",
+        "not_in",
+    ],
+    FieldType.Number: [
+        "is",
+        "is_not",
+        "less_than",
+        "greater_than",
+        "between",
+        "not_between",
+        "in",
+        "not_in",
+    ],
+    FieldType.Addressing: [
+        "is",
+        "is_not",
+        "contains",
+        "not_contains",
+        "in",
+        "type_is",
+        "type_is_not",
+        "name_contains",
+        "name_not_contains",
+        "name_starts_with",
+        "name_ends_with",
+    ],
+    FieldType.Checkbox: ["is", "is_not"],
+    FieldType.Color: ["is", "is_not", "in", "not_in"],
+    FieldType.Currency: [
+        "is",
+        "is_not",
+        "less_than",
+        "greater_than",
+        "between",
+        "not_between",
+        "in",
+        "not_in",
+    ],
+    FieldType.Date: [
+        "is",
+        "is_not",
+        "greater_than",
+        "less_than",
+        "in_last",
+        "not_in_last",
+        "in_next",
+        "not_in_next",
+        "in_calendar_day",
+        "in_calendar_week",
+        "in_calendar_month",
+        "in_calendar_year",
+        "between",
+        "in",
+        "not_in",
+    ],
+    FieldType.DateTime: [
+        "is",
+        "is_not",
+        "greater_than",
+        "less_than",
+        "in_last",
+        "not_in_last",
+        "in_next",
+        "not_in_next",
+        "in_calendar_day",
+        "in_calendar_week",
+        "in_calendar_month",
+        "in_calendar_year",
+        "between",
+        "in",
+        "not_in",
+    ],
+    FieldType.Duration: [
+        "is",
+        "is_not",
+        "greater_than",
+        "less_than",
+        "between",
+        "in",
+        "not_in",
+    ],
+    FieldType.Entity: [
+        "is",
+        "is_not",
+        "type_is",
+        "type_is_not",
+        "name_contains",
+        "name_not_contains",
+        "name_is",
+        "in",
+        "not_in",
+    ],
+    FieldType.Footage: ["is", "is_not"],
+    FieldType.Image: ["is", "is_not"],
+    FieldType.List: ["is", "is_not", "in", "not_in"],
+    FieldType.Password: [],
+    FieldType.Percent: [
+        "is",
+        "is_not",
+        "greater_than",
+        "less_than",
+        "between",
+        "in",
+        "not_in",
+    ],
+    FieldType.Serializable: [],
+    FieldType.StatusList: ["is", "is_not", "in", "not_in"],
+    FieldType.Summary: [],
+    FieldType.TagList: [
+        "is",
+        "is_not",
+        "name_contains",
+        "name_not_contains",
+        "name_id",
+    ],
+    FieldType.Timecode: [
+        "is",
+        "is_not",
+        "greater_than",
+        "less_than",
+        "between",
+        "in",
+        "not_in",
+    ],
+    FieldType.Url: [],
+}
+
+
 @dataclass
 class ShotgridField:
     entity: "ShotgridEntity" = field(repr=False)
@@ -384,6 +694,20 @@ class ShotgridField:
         default=None, repr=False
     )
     one_sided: bool = field(default=False, repr=False)
+
+    @property
+    def connection_query_target_field(self) -> Optional["ShotgridField"]:
+        """Get the field we're querying if accessing via connection table"""
+        if not self.entity.api_name.endswith("Connection"):
+            return None
+        possible_targets = [
+            f
+            for f in self.entity.fields.values()
+            if f.field_type == FieldType.Entity
+            and f != self
+            and not f.api_name.startswith("sg_")
+        ]
+        return next(iter(possible_targets), None)
 
     def from_database(self, value: Any) -> Any:
         if value is None:
@@ -447,6 +771,10 @@ class ShotgridField:
             return value
         if self.field_type == FieldType.Date:
             if isinstance(value, datetime.datetime):
+                return value
+            if value in ["MINUTE", "HOUR", "DAY", "WEEK", "MONTH", "YEAR"]:
+                return value
+            if isinstance(value, int):
                 return value
             return datetime.datetime.strptime(value, "%Y-%m-%d").date()
         if self.field_type == FieldType.DateTime:
@@ -573,6 +901,8 @@ class ShotgridSchema:
                 if field.field_type != FieldType.MultiEntity:
                     continue
                 if field.connection_entity:
+                    continue
+                if field.reverse_of and field.reverse_of.field_type == FieldType.Entity:
                     continue
                 real_connection_entity = next(
                     (

@@ -28,3 +28,7 @@ testpaths = [
     "tests",
     "integration",
 ]
+
+[tool.ruff]
+ignore = ["E712", "E711"]
+line-length = 120

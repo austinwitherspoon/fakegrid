@@ -1,8 +1,17 @@
+import calendar
+import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
 from typing_extensions import Literal
 
 from requests import get
-from .schema import FieldType, ShotgridField, ShotgridSchema, camel_case, snake_case
+from .schema import (
+    FieldType,
+    ShotgridField,
+    ShotgridSchema,
+    camel_case,
+    snake_case,
+    ALLOWED_OPERATIONS_BY_FIELD_TYPE,
+)
 from .models import (
     schema_to_models,
     Base,
@@ -12,6 +21,7 @@ from .models import (
 from sqlalchemy import (
     ClauseElement,
     and_,
+    case,
     create_engine,
     Engine,
     literal_column,
@@ -19,7 +29,7 @@ from sqlalchemy import (
     or_,
     select,
 )
-from shotgun_api3 import Fault
+from shotgun_api3 import Fault, sg_timezone
 from sqlalchemy.sql import functions
 from sqlalchemy.orm import Session, load_only, aliased
 
@@ -69,7 +79,23 @@ class Fakegrid:
         _session: Optional[Session] = None,
     ):
         model = self._fakegrid_models[entity_type]
+        data.pop("type", None)
         fields = set(data.keys()).union(set(return_fields or []))
+
+        # correct UTC dates
+        if self._convert_datetimes_to_utc:
+            for field in fields:
+                if field not in data:
+                    continue
+                field_schema = model._entity.fields[field]
+                if field_schema.field_type == FieldType.DateTime:
+                    local_time = data[field]
+                    if not local_time:
+                        continue
+                    if local_time.tzinfo is None:
+                        local_time.replace(tzinfo=sg_timezone.local)
+                    utc_time = local_time.astimezone(sg_timezone.utc)
+                    data[field] = utc_time
 
         entity_names: Dict[str, Dict[int, Optional[str]]] = {}
         entity_dicts = []
@@ -302,6 +328,8 @@ class Fakegrid:
             defaults ``"id"`` and ``"type"`` which are always included.
         :rtype: list
         """
+        if entity_type not in self._fakegrid_models:
+            raise Fault(f'API read() invalid entity type "{entity_type}"')
         model = self._fakegrid_models[entity_type]
         fields = fields or []
 
@@ -313,10 +341,10 @@ class Fakegrid:
 
         fields_to_query: List[Tuple[str, Any, Optional[ShotgridField]]] = [
             ("id", model.id, model._entity.fields["id"]),
-            ("type", literal_column(f'"{model._entity.api_name}"'), None),
+            ("type", literal_column(f'"{model._entity.api_name}"').label("type"), None),
         ]  # type:ignore
         for alias_and_field in _fields:
-            requested_field, alias, field_name = alias_and_field
+            requested_field, alias, field_name, parent_model = alias_and_field
             if requested_field in ["id", "type"]:
                 continue
             actual_field_name = requested_field.split(".")[-1]
@@ -329,14 +357,33 @@ class Fakegrid:
                 actual_field_name
             ]
             if field_schema.field_type == FieldType.MultiEntity:
-                fields_to_query.append(
-                    (
-                        requested_field,
-                        multi_entity_sql_representation(
+                if (
+                    field_name == "id"
+                ):  # this is entity reverse field! Get the actual entities
+                    entity_schema = alias._entity
+                    name_field = entity_schema.name_field
+                    column = case(
+                        {getattr(parent_model, "id") == None: None},
+                        else_=multi_entity_sql_representation(
+                            entity_schema.api_name,
+                            getattr(alias, "id"),
+                            getattr(alias, name_field) if name_field else None,
+                        ),
+                    ).label(requested_field)
+                else:
+                    column = case(
+                        {getattr(parent_model, "id") == None: None},
+                        else_=multi_entity_sql_representation(
                             getattr(alias, f"{field_name}_type"),
                             getattr(alias, f"{field_name}_id"),
                             getattr(alias, f"{field_name}_name"),
-                        ).label(requested_field),
+                        ),
+                    ).label(requested_field)
+
+                fields_to_query.append(
+                    (
+                        requested_field,
+                        column,
                         field_schema,
                     )
                 )
@@ -365,13 +412,12 @@ class Fakegrid:
         else:
             query = query.where(getattr(model, "is_retired") == False)  # noqa
 
-        if order:
-            query = query.order_by(
-                *[
-                    getattr(getattr(model, i["field_name"]), i["direction"])()
-                    for i in order
-                ]
-            )
+        query = query.order_by(
+            *[
+                getattr(getattr(model, i["field_name"]), i["direction"])()
+                for i in order or [{"field_name": "id", "direction": "asc"}]
+            ]
+        )
         if limit:
             query = query.limit(limit)
         if page:
@@ -382,10 +428,30 @@ class Fakegrid:
             if field_schema is None:
                 transforms.append((requested_field, lambda x: x))
                 continue
+            transform_function = lambda x, schema=field_schema: schema.from_database(x)
+            if field_schema.field_type == FieldType.DateTime:
+                if self._convert_datetimes_to_utc:
+                    # convert server (UTC) to local timezone
+                    transform_function = (
+                        lambda x, func=transform_function: sg_timezone.local.fromutc(
+                            func(x)
+                        )
+                        if x
+                        else x
+                    )
+                    # transform_function = lambda x: x.replace(tzinfo=sg_timezone.local)
+            if field_schema.field_type == FieldType.MultiEntity:
+                transform_function = (
+                    lambda x, func=transform_function: sorted(
+                        func(x), key=lambda i: i["name"].lower()
+                    )
+                    if x
+                    else x
+                )
             transforms.append(
                 (
                     requested_field,
-                    lambda x, field_schema=field_schema: field_schema.from_database(x),
+                    transform_function,
                 )
             )
 
@@ -450,7 +516,10 @@ class Fakegrid:
             original, alias, field, parent_model = field_tuple
 
             field_schema = alias._entity.fields[field]
-            values = [field_schema.to_database(i) for i in values]
+            if isinstance(values[0], list):
+                values = [[field_schema.to_database(i) for i in v] for v in values]
+            else:
+                values = [field_schema.to_database(i) for i in values]
 
             actual_field_name = original.split(".")[-1]
             actual_entity_type = (
@@ -512,28 +581,54 @@ class Fakegrid:
         actual_schema = actual_schema or field_schema
         parent_model = parent_model or model
         field = getattr(model, field_schema.api_name)
+
+        valid_operators = ALLOWED_OPERATIONS_BY_FIELD_TYPE[actual_schema.field_type]
+        if operator not in valid_operators:
+            raise Fault(
+                f"API read() {actual_schema.entity.api_name}.{actual_schema.api_name}'s "
+                f"'{actual_schema.field_type.value}' data type doesn't support "
+                f"'{operator}' 'relation':\n"
+                f"Valid relations are: [{', '.join(valid_operators)}]"
+            )
+
+        if not isinstance(value[0], list) and operator in ["in", "not_in"]:
+            operator = {"in": "is", "not_in": "is_not"}[operator]
+
         if actual_schema.field_type == FieldType.Entity:
             id_field = getattr(model, f"{actual_schema.api_name}_id")
             type_field = getattr(model, f"{actual_schema.api_name}_type")
             name_field = getattr(model, f"{actual_schema.api_name}_name")
             if operator == "is":
+                if value[0] is None:
+                    return and_(id_field == None, type_field == None)
                 return and_(
                     id_field == value[0]["id"],
                     type_field == value[0]["type"],
                 )
             elif operator == "is_not":
+                if value[0] is None:
+                    return or_(
+                        id_field != None,
+                        type_field != None,
+                    )
                 return or_(
                     id_field != value[0]["id"],
                     type_field != value[0]["type"],
+                    id_field == None,
+                    type_field == None,
                 )
             elif operator == "type_is":
+                if value[0] is None:
+                    return type_field == None
                 return type_field == value[0]
             elif operator == "type_is_not":
-                return type_field != value[0]
+                if value[0] is None:
+                    return type_field != None
+                return or_(type_field != value[0], type_field == None)
             elif operator == "name_contains":
                 return name_field.like(f"%{value[0]}%")
             elif operator == "name_not_contains":
-                return name_field.notlike(f"%{value[0]}%")
+                return or_(name_field.notlike(f"%{value[0]}%"), name_field == None)
             elif operator == "name_is":
                 return name_field == value[0]
             elif operator == "in":
@@ -543,36 +638,81 @@ class Fakegrid:
                             id_field == i["id"],
                             type_field == i["type"],
                         )
-                        for i in value
+                        if i
+                        else and_(id_field == None, type_field == None)
+                        for i in value[0]
                     ]
                 )
             elif operator == "not_in":
-                return and_(
-                    *[
-                        or_(
-                            id_field != i["id"],
-                            type_field != i["type"],
-                        )
-                        for i in value
-                    ]
+                return or_(
+                    field == None,
+                    and_(
+                        *[
+                            or_(
+                                id_field != i["id"],
+                                type_field != i["type"],
+                                id_field == None,
+                                type_field == None,
+                            )
+                            if i
+                            else or_(id_field == None, type_field == None)
+                            for i in value[0]
+                        ]
+                    ),
                 )
         elif actual_schema.field_type in [
             FieldType.MultiEntity,
             FieldType.Addressing,
             FieldType.TagList,
         ]:
-            id_field = getattr(model, f"{field_schema.api_name}_id")
-            type_field = getattr(model, f"{field_schema.api_name}_type")
-            name_field = getattr(model, f"{field_schema.api_name}_name")
-            connection_field = actual_schema.connection_entity[1]
-            raw_connection_model = self._fakegrid_models[
-                actual_schema.connection_entity[0].api_name
-            ]
-
             if isinstance(value[0], list) and operator in ["is", "is_not"]:
                 raise Fault(
                     f"API read() '{operator}' 'relation' expects a 1-element array:\n"
                     f"{value[0]}"
+                )
+
+            if field_schema.api_name == "id":
+                id_field = getattr(model, "id")
+                type_field = literal_column(f'"{model._entity.api_name}"')
+                name_field = (
+                    getattr(model, model._entity.name_field)
+                    if model._entity.name_field
+                    else literal_column("NULL")
+                )
+                assert actual_schema.reverse_of
+                connection_field = actual_schema.reverse_of.api_name
+                raw_connection_model = self._fakegrid_models[model._entity.api_name]
+                value_id_field = getattr(raw_connection_model, "id")
+                value_type_field = type_field
+                value_name_field = (
+                    getattr(
+                        raw_connection_model, raw_connection_model._entity.name_field
+                    )
+                    if raw_connection_model._entity.name_field
+                    else literal_column("NULL")
+                )
+            else:
+                id_field = getattr(model, f"{field_schema.api_name}_id")
+                type_field = getattr(model, f"{field_schema.api_name}_type")
+                name_field = getattr(model, f"{field_schema.api_name}_name")
+                assert actual_schema.connection_entity
+                connection, connection_field = actual_schema.connection_entity
+
+                opposite_field = connection.fields[
+                    connection_field
+                ].connection_query_target_field
+                assert opposite_field
+                raw_connection_model = self._fakegrid_models[
+                    actual_schema.connection_entity[0].api_name
+                ]
+                value_id_field = getattr(
+                    raw_connection_model, f"{opposite_field.api_name}_id"
+                )
+                value_type_field = getattr(
+                    raw_connection_model, f"{opposite_field.api_name}_type"
+                )
+                value_name_field = getattr(
+                    raw_connection_model, f"{opposite_field.api_name}_name"
                 )
 
             if operator == "is":
@@ -586,13 +726,8 @@ class Fakegrid:
                     .select_from(raw_connection_model)
                     .where(
                         and_(
-                            getattr(raw_connection_model, f"{field_schema.api_name}_id")
-                            == value[0]["id"],
-                            getattr(
-                                raw_connection_model,
-                                f"{field_schema.api_name}_type",
-                            )
-                            == value[0]["type"],
+                            value_id_field == value[0]["id"],
+                            value_type_field == value[0]["type"],
                             getattr(raw_connection_model, f"{connection_field}_id")
                             == getattr(parent_model, "id"),
                             getattr(raw_connection_model, f"{connection_field}_type")
@@ -603,18 +738,14 @@ class Fakegrid:
                     .exists()
                 )
             elif operator == "type_is":
-                return type_field == value[0]
+                return and_(type_field == value[0], id_field != None)
             elif operator == "type_is_not":
                 return not_(
                     select(getattr(raw_connection_model, "id"))
                     .select_from(raw_connection_model)
                     .where(
                         and_(
-                            getattr(
-                                raw_connection_model,
-                                f"{field_schema.api_name}_type",
-                            )
-                            == value[0],
+                            value_type_field == value[0],
                             getattr(raw_connection_model, f"{connection_field}_id")
                             == getattr(parent_model, "id"),
                             getattr(raw_connection_model, f"{connection_field}_type")
@@ -632,9 +763,7 @@ class Fakegrid:
                     .select_from(raw_connection_model)
                     .where(
                         and_(
-                            getattr(
-                                raw_connection_model, f"{field_schema.api_name}_name"
-                            ).like(f"%{value[0]}%"),
+                            value_name_field.like(f"%{value[0]}%"),
                             getattr(raw_connection_model, f"{connection_field}_id")
                             == getattr(parent_model, "id"),
                             getattr(raw_connection_model, f"{connection_field}_type")
@@ -665,16 +794,8 @@ class Fakegrid:
                             or_(
                                 *[
                                     and_(
-                                        getattr(
-                                            raw_connection_model,
-                                            f"{field_schema.api_name}_id",
-                                        )
-                                        == i["id"],
-                                        getattr(
-                                            raw_connection_model,
-                                            f"{field_schema.api_name}_type",
-                                        )
-                                        == i["type"],
+                                        value_id_field == i["id"],
+                                        value_type_field == i["type"],
                                     )
                                     for i in value[0]
                                 ]
@@ -688,12 +809,11 @@ class Fakegrid:
                     )
                     .exists()
                 )
-
         else:
             if operator == "is":
                 return field == value[0]
             elif operator == "is_not":
-                return field != value[0]
+                return or_(field != value[0], field == None)
             elif operator == "less_than":
                 return field < value[0]
             elif operator == "greater_than":
@@ -701,19 +821,132 @@ class Fakegrid:
             elif operator == "contains":
                 return field.like(f"%{value[0]}%")
             elif operator == "not_contains":
-                return field.notlike(f"%{value[0]}%")
+                return or_(field.notlike(f"%{value[0]}%"), field == None)
             elif operator == "starts_with":
                 return field.like(f"{value[0]}%")
             elif operator == "ends_with":
                 return field.like(f"%{value[0]}")
             elif operator == "between":
+                if isinstance(value[0], list):
+                    value = value[0]
                 return field.between(value[0], value[1])
             elif operator == "not_between":
-                return field.notbetween(value[0], value[1])
+                if isinstance(value[0], list):
+                    value = value[0]
+                return or_(field.notbetween(value[0], value[1]), field == None)
+            elif operator in ["in_last", "not_in_last"]:
+                amount, unit = value
+                if not isinstance(amount, (int, float)):
+                    raise Fault(
+                        f"API read() 'in_last' 'relation' expects an integer:\n{amount}"
+                    )
+                if unit not in ["HOUR", "DAY", "WEEK", "MONTH", "YEAR"]:
+                    raise Fault(
+                        f"API read() 'in_last' 'relation' expects a unit of time:\n{unit}"
+                    )
+                # convert to hours
+                hours = amount
+                if unit == "DAY":
+                    hours = amount * 24
+                elif unit == "WEEK":
+                    hours = amount * 24 * 7
+                elif unit == "MONTH":
+                    hours = amount * 24 * 30
+                elif unit == "YEAR":
+                    hours = amount * 24 * 365
+                clause = and_(
+                    field
+                    >= datetime.datetime.utcnow() - datetime.timedelta(hours=hours),
+                    field <= datetime.datetime.utcnow(),
+                )
+                if operator == "not_in_last":
+                    clause = not_(clause)
+                return clause
+            elif operator in ["in_next", "not_in_next"]:
+                amount, unit = value
+                if not isinstance(amount, (int, float)):
+                    raise Fault(
+                        f"API read() 'in_last' 'relation' expects an integer:\n{amount}"
+                    )
+                if unit not in ["HOUR", "DAY", "WEEK", "MONTH", "YEAR"]:
+                    raise Fault(
+                        f"API read() 'in_last' 'relation' expects a unit of time:\n{unit}"
+                    )
+                # convert to hours
+                hours = amount
+                if unit == "DAY":
+                    hours = amount * 24
+                elif unit == "WEEK":
+                    hours = amount * 24 * 7
+                elif unit == "MONTH":
+                    hours = amount * 24 * 30
+                elif unit == "YEAR":
+                    hours = amount * 24 * 365
+
+                clause = and_(
+                    field
+                    <= datetime.datetime.utcnow() + datetime.timedelta(hours=hours),
+                    field >= datetime.datetime.utcnow(),
+                )
+                if operator == "not_in_next":
+                    clause = not_(clause)
+            elif operator == "in_calendar_day":
+                amount = value[0]
+                if not isinstance(amount, (int, float)):
+                    raise Fault(
+                        f"API read() 'in_calendar_day' 'relation' expects an integer:\n{amount}"
+                    )
+                # offset today by amount days
+                day = datetime.datetime.utcnow() + datetime.timedelta(days=amount)
+                # get the start of the day
+                start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
+                # get the end of the day
+                end_of_day = day.replace(
+                    hour=23, minute=59, second=59, microsecond=999999
+                )
+                return field.between(start_of_day, end_of_day)
+            elif operator == "in_calendar_week":
+                amount = value[0]
+                if not isinstance(amount, (int, float)):
+                    raise Fault(
+                        f"API read() 'in_calendar_week' 'relation' expects an integer:\n{amount}"
+                    )
+                # offset today by amount weeks
+                week = datetime.datetime.utcnow() + datetime.timedelta(weeks=amount)
+                week = week.replace(hour=0, minute=0, second=0, microsecond=0)
+                # get the start of the week
+                start_of_week = week - datetime.timedelta(days=week.weekday())
+                # get the end of the week
+                end_of_week = start_of_week + datetime.timedelta(days=6)
+                return field.between(start_of_week, end_of_week)
+            elif operator == "in_calendar_month":
+                amount = value[0]
+                if not isinstance(amount, (int, float)):
+                    raise Fault(
+                        f"API read() 'in_calendar_month' 'relation' expects an integer:\n{amount}"
+                    )
+                # offset today by amount months
+                current_month = datetime.datetime.utcnow().month
+                month = int(current_month + amount)
+                # get the start of the month
+                start_of_month = datetime.datetime.utcnow().replace(
+                    month=month, day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+                # get the end of the month
+                end_of_month = datetime.datetime.utcnow().replace(
+                    month=month,
+                    day=calendar.monthrange(month, month)[1],
+                    hour=23,
+                    minute=59,
+                    second=59,
+                    microsecond=999999,
+                )
+                return field.between(start_of_month, end_of_month)
+
             elif operator == "in":
                 return or_(*[field == i for i in value[0]])
             elif operator == "not_in":
-                return and_(*[field != i for i in value[0]])
+                return or_(and_(*[field != i for i in value[0]]), field == None)
             else:
                 raise NotImplementedError(f"Unsupported operator: {operator}")
 
@@ -724,7 +957,7 @@ class Fakegrid:
         filters: list,
         _joins=None,
     ) -> Tuple[
-        List[Tuple[str, Type[Base], str]],
+        List[Tuple[str, Type[Base], str, Type[Base]]],
         list,
         List[Tuple[Type["Base"], Any]],
     ]:
@@ -737,14 +970,21 @@ class Fakegrid:
         new_filters = []
         joins = _joins if _joins is not None else []
         for field in fields:
-            original, alias, field, _ = self._resolve_dotted_field(model, field, joins)
-            new_fields.append((original, alias, field))
+            try:
+                original, alias, field, parent_model = self._resolve_dotted_field(
+                    model, field, joins
+                )
+                new_fields.append((original, alias, field, parent_model))
+            except Fault:
+                continue
         for filter in filters:
             if isinstance(filter, dict):
                 new_filters.append(
                     {
                         "filter_operator": filter["filter_operator"],
-                        "filters": self._resolve_fields(model, [], filters, joins)[1],
+                        "filters": self._resolve_fields(
+                            model, [], filter["filters"], joins
+                        )[1],
                     }
                 )
             else:
@@ -767,144 +1007,110 @@ class Fakegrid:
         parent_schema = model._entity
         previous_alias = model
         parent_alias = model
-        is_multi_entity = parent_schema.fields[field].field_type in [
+        dotted_entity = (
+            field.split(".")[-2]
+            if len(field.split(".")) > 1
+            else parent_schema.api_name
+        )
+        dotted_field = field.split(".")[-1] if len(field.split(".")) > 1 else field
+        if dotted_field not in self._fakegrid_schema.entities[dotted_entity].fields:
+            raise Fault(f"API read() {model._entity.api_name}.{field} doesn't exist.")
+        is_multi_entity = self._fakegrid_schema.entities[dotted_entity].fields[
+            dotted_field
+        ].field_type in [
             FieldType.MultiEntity,
             FieldType.Addressing,
             FieldType.TagList,
         ]
         if "." not in field and not is_multi_entity:
             return field, model, field, model
-        if "." in field:
-            field_layers = field.split(".")
-            for i in range(0, len(field_layers), 2):
-                field = field_layers[i]
-                field_entity_name = (
-                    field_layers[i + 1] if i + 1 < len(field_layers) else None
+        field_layers = field.split(".")
+        for i in range(0, len(field_layers), 2):
+            field = field_layers[i]
+            field_entity_name = (
+                field_layers[i + 1] if i + 1 < len(field_layers) else None
+            )
+            field_schema = parent_schema.fields[field]
+            field_entity_name = field_entity_name or previous_alias._entity.api_name
+            if field_schema.field_type == FieldType.Entity:
+                new_alias = aliased(self._fakegrid_models[field_entity_name])
+                new_join = (
+                    new_alias,
+                    and_(
+                        getattr(previous_alias, f"{field}_id")
+                        == new_alias.id,  # type:ignore
+                        getattr(previous_alias, f"{field}_type") == field_entity_name,
+                    ),
                 )
-                field_schema = parent_schema.fields[field]
-                if not field_entity_name:
-                    continue
-                if field_schema.field_type == FieldType.Entity:
-                    new_alias = aliased(self._fakegrid_models[field_entity_name])
+                if i + 2 < len(field_layers):
+                    parent_alias = previous_alias
+                    previous_alias = new_alias
+                    joins.append(new_join)
+            elif field_schema.field_type == FieldType.MultiEntity:
+                # join connection table
+                if field_schema.connection_entity:
+                    connection_entity, conn_field_name = field_schema.connection_entity
+                    connection_model = self._fakegrid_models[connection_entity.api_name]
+                    conn_field = connection_entity.fields[conn_field_name]
+                    assert conn_field
+                    conn_opposite_field = conn_field.connection_query_target_field
+                    assert conn_opposite_field
+                    conn_opposite_field_name = conn_opposite_field.api_name
+
+                    new_alias = aliased(connection_model)
                     joins.append(
                         (
                             new_alias,
                             and_(
-                                getattr(previous_alias, f"{field}_id")
-                                == new_alias.id,  # type:ignore
-                                getattr(previous_alias, f"{field}_type")
-                                == field_entity_name,
+                                getattr(previous_alias, "id")
+                                == getattr(new_alias, f"{conn_field_name}_id"),
+                                getattr(new_alias, f"{conn_field_name}_type")
+                                == parent_schema.api_name,
+                                getattr(new_alias, "is_retired") == False,  # noqa
                             ),
                         )
                     )
+                    conn_alias = new_alias
+                    new_alias = aliased(self._fakegrid_models[field_entity_name])
+                    new_join = (
+                        new_alias,
+                        and_(
+                            getattr(new_alias, "id")
+                            == getattr(conn_alias, f"{conn_opposite_field_name}_id"),
+                            getattr(conn_alias, f"{conn_opposite_field_name}_type")
+                            == field_entity_name,
+                            getattr(conn_alias, "is_retired") == False,  # noqa
+                        ),
+                    )
                     parent_alias = previous_alias
                     previous_alias = new_alias
-                elif field_schema.field_type == FieldType.MultiEntity:
-                    # join connection table
-                    if field_schema.connection_entity:
-                        connection_entity, conn_field = field_schema.connection_entity
-                        connection_model = self._fakegrid_models[
-                            connection_entity.api_name
-                        ]
-                        conn_opposite_field = "linked_entity"
-                        if conn_opposite_field not in connection_entity.fields:
-                            conn_opposite_field = snake_case(field_entity_name)
-                        if conn_opposite_field not in connection_entity.fields:
-                            conn_opposite_field = next(
-                                i
-                                for i in connection_entity.fields.values()
-                                if field_entity_name
-                                in i.properties["properties"]
-                                .get("valid_types", {})
-                                .get("value", [])
-                            ).api_name
-
-                        new_alias = aliased(connection_model)
-                        joins.append(
-                            (
-                                new_alias,
-                                and_(
-                                    getattr(previous_alias, "id")
-                                    == getattr(new_alias, f"{conn_field}_id"),
-                                    getattr(new_alias, f"{conn_field}_type")
-                                    == parent_schema.api_name,
-                                    getattr(new_alias, "is_retired") == False,  # noqa
-                                ),
-                            )
-                        )
-                        conn_alias = new_alias
-                        new_alias = aliased(self._fakegrid_models[field_entity_name])
-                        joins.append(
-                            (
-                                new_alias,
-                                and_(
-                                    getattr(new_alias, "id")
-                                    == getattr(conn_alias, f"{conn_opposite_field}_id"),
-                                    getattr(conn_alias, f"{conn_opposite_field}_type")
-                                    == field_entity_name,
-                                    getattr(conn_alias, "is_retired") == False,  # noqa
-                                ),
-                            )
-                        )
-                        parent_alias = previous_alias
-                        previous_alias = new_alias
+                    field = conn_opposite_field_name
+                    # don't join new table if we're not drilling down further
+                    if i + 2 < len(field_layers):
+                        joins.append(new_join)
                     else:
-                        reverse_field = field_schema.reverse_of
-                        assert reverse_field
-                        reverse_entity = reverse_field.entity
-                        reverse_model = self._fakegrid_models[reverse_entity.api_name]
-                        new_alias = aliased(reverse_model)
-                        joins.append(
-                            (
-                                new_alias,
-                                and_(
-                                    getattr(previous_alias, "id")
-                                    == getattr(
-                                        new_alias, f"{reverse_field.api_name}_id"
-                                    ),
-                                    getattr(new_alias, f"{reverse_field.api_name}_type")
-                                    == parent_schema.api_name,
-                                    getattr(new_alias, "is_retired") == False,  # noqa
-                                ),
-                            )
-                        )
-                        parent_alias = previous_alias
-                        previous_alias = new_alias
-
-                parent_schema = self._fakegrid_schema.entities[field_entity_name]
-        elif is_multi_entity:
-            field_schema = parent_schema.fields[field]
-            if field_schema.connection_entity:
-                connection_entity, conn_field = field_schema.connection_entity
-                connection_model = self._fakegrid_models[connection_entity.api_name]
-                conn_opposite_field = "linked_entity"
-                if conn_opposite_field not in connection_entity.fields:
-                    conn_opposite_field = snake_case(original_field)
-                if conn_opposite_field not in connection_entity.fields:
-                    conn_opposite_field = next(
-                        i
-                        for i in connection_entity.fields.values()
-                        if original_field
-                        in i.properties["properties"]
-                        .get("valid_types", {})
-                        .get("value", [])
-                    ).api_name
-
-                new_alias = aliased(connection_model)
-                joins.append(
-                    (
+                        previous_alias = conn_alias
+                else:
+                    reverse_field = field_schema.reverse_of
+                    assert reverse_field
+                    reverse_entity = reverse_field.entity
+                    reverse_model = self._fakegrid_models[reverse_entity.api_name]
+                    new_alias = aliased(reverse_model)
+                    new_join = (
                         new_alias,
                         and_(
                             getattr(previous_alias, "id")
-                            == getattr(new_alias, f"{conn_field}_id"),
-                            getattr(new_alias, f"{conn_field}_type")
+                            == getattr(new_alias, f"{reverse_field.api_name}_id"),
+                            getattr(new_alias, f"{reverse_field.api_name}_type")
                             == parent_schema.api_name,
                             getattr(new_alias, "is_retired") == False,  # noqa
                         ),
                     )
-                )
-                parent_alias = previous_alias
-                previous_alias = new_alias
-                field = conn_opposite_field
+                    parent_alias = previous_alias
+                    previous_alias = new_alias
+                    field = "id"
+                    joins.append(new_join)
+
+            parent_schema = self._fakegrid_schema.entities[field_entity_name]
 
         return original_field, previous_alias, field, parent_alias

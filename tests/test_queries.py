@@ -1,11 +1,16 @@
+import os
 import pickle
+import sys
+from datetime import datetime
+from pathlib import Path
+
 import pytest
 import shotgun_api3
-from datetime import datetime
-
 from sqlalchemy import create_engine
 
+sys.path.append(str(Path(__file__).parent.parent))
 import fakegrid
+from fakegrid.fakegrid import Fakegrid
 
 # artists taken from demo site
 ARTIST_1 = {"type": "HumanUser", "id": 19}
@@ -13,7 +18,11 @@ ARTIST_2 = {"type": "HumanUser", "id": 18}
 SHOTGRID_SUPPORT = {"type": "HumanUser", "id": 24}
 ZEBRA_VERSION = {"id": 6944, "name": "alias_model_Zebra", "type": "Version"}
 
-LOCAL_TIMEZONE = shotgun_api3.sg_timezone.LocalTimezone()
+LOCAL_TIMEZONE = shotgun_api3.sg_timezone.local
+
+RESULTS_FILE = Path(__file__).parent.parent / "test/real_test_results.pickle"
+EXPECTED_RESULTS = pickle.load(RESULTS_FILE.open("rb"))
+
 
 # Queries to test the reading and filtering of different data types
 TEST_QUERIES = [
@@ -311,7 +320,7 @@ TEST_QUERIES = [
     ("HumanUser", [["percent_capacity", "in", [99, 100]]], ["percent_capacity"]),
     ("HumanUser", [["percent_capacity", "not_in", [1, 2]]], ["percent_capacity"]),
     # Serializable
-    ("EventLogEntry", [], ["meta"]),
+    ("EventLogEntry", [["id", "is", 481221]], ["meta"]),  # First event log on demo site
     # Status List
     ("Task", [], ["sg_status_list"]),
     ("Task", [["sg_status_list", "is", "ip"]], ["sg_status_list"]),
@@ -345,7 +354,8 @@ TEST_QUERIES = [
     ),
     # Timecode - no timecode field on demo site?
     # url
-    ("Version", [], ["sg_uploaded_movie"]),
+    # ("Version", [], ["sg_uploaded_movie"]), # url changes on demo site due to AWS
+    # so this has been manually tested unfortunately
     # other interesting scenarios
     # projects only show active users- so all demo site disabled users won't appear here
     ("Project", [], ["users"]),
@@ -382,10 +392,21 @@ TEST_QUERIES = [
         [["sg_versions.Version.entity.Shot.id", "is", 1021]],
         ["sg_versions", "code"],
     ),
+    # ( # This is broken see example below
+    # something is weird with Notes in SG's backend
+    #     "Shot",
+    #     [["sg_versions.Version.open_notes.Note.project.Project.id", "is", 70]],
+    #     ["sg_versions", "code"],
+    # ),
+    # ( # Example: This produces results on SG when it shouldn't??
+    #     "Version",
+    #     [["open_notes.Note.project.Project.id", "is", 70], ["open_notes", "is", None]], # should cancel each other
+    #     ["sg_versions", "code"],
+    # ),
     (
         "Shot",
-        [["sg_versions.Version.open_notes.Note.project.Project.id", "is", 70]],
-        ["sg_versions", "code"],
+        [["assets.Asset.sequences.Sequence.shots.Shot.id", "is", 862]],
+        ["code"],
     ),
     # stuff that doesn't exist
     ("NotAnEntity", [], ["code"]),
@@ -427,13 +448,6 @@ TEST_QUERIES = [
     ),
 ]
 
-from pathlib import Path
-from fakegrid.fakegrid import Fakegrid
-
-expected_results = pickle.load(
-    open(Path(__file__).parent.parent / "test/real_test_results.pickle", "rb")
-)
-
 
 @pytest.fixture(scope="module")
 def sg():
@@ -441,7 +455,7 @@ def sg():
 
     source = sqlite3.connect("demo_site.sqlite")
     engine = create_engine("sqlite:///")
-    source.backup(engine.raw_connection().driver_connection)
+    source.backup(engine.raw_connection().driver_connection)  # type:ignore
     schema = fakegrid.ShotgridSchema.from_file(
         Path(__file__).parent.parent / "schema.pickle"
     )
@@ -451,7 +465,7 @@ def sg():
 @pytest.mark.parametrize("entity_type, filters, fields", TEST_QUERIES)
 def test_queries(entity_type, filters, fields, sg):
     key = "{} {} {}".format(entity_type, filters, fields)
-    expected_result = expected_results[key]
+    expected_result = EXPECTED_RESULTS[key]
     try:
         our_result = sg.find(entity_type, filters, fields)
     except Exception as e:
@@ -460,3 +474,27 @@ def test_queries(entity_type, filters, fields, sg):
         assert type(our_result) == type(expected_result)
     else:
         assert our_result == expected_result
+
+
+# Running this file directly will regenerate test results
+# Do this if you have changed the test queries!
+if __name__ == "__main__":
+    sg = shotgun_api3.Shotgun(  # noqa # type:ignore
+        os.environ["SG_SERVER"],
+        os.environ["SG_SCRIPT_NAME"],
+        os.environ["SG_SCRIPT_KEY"],
+    )
+    all_results = {}
+    for entity_type, filters, fields in TEST_QUERIES:
+        key = "{} {} {}".format(entity_type, filters, fields)
+        print("Testing query: {} {} {}".format(entity_type, filters, fields))
+        try:
+            results = sg.find(entity_type, filters, fields)
+        except Exception as e:
+            results = e
+
+        print("Result: {}".format(results))
+        all_results[key] = results
+
+    with RESULTS_FILE.open("wb") as f:
+        pickle.dump(all_results, f)
