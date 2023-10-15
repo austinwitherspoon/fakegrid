@@ -698,8 +698,19 @@ class ShotgridField:
     @property
     def connection_query_target_field(self) -> Optional["ShotgridField"]:
         """Get the field we're querying if accessing via connection table"""
-        if not self.entity.api_name.endswith("Connection"):
+        if self.field_type not in [
+            FieldType.MultiEntity,
+            FieldType.Entity,
+            FieldType.Addressing,
+            FieldType.TagList,
+        ]:
             return None
+
+        if not self.entity.api_name.endswith("Connection"):
+            # this happens when we're the reverse of a single entity link field,
+            # So there's no connection table, but we want to return the parent field
+            return None if self.field_type != FieldType.MultiEntity else self.reverse_of
+
         possible_targets = [
             f
             for f in self.entity.fields.values()
@@ -749,6 +760,8 @@ class ShotgridField:
     ) -> Any:
         if value is None:
             return None
+        if isinstance(value, list):
+            return [self.to_database(v) for v in value]
         if self.field_type == FieldType.Text:
             return str(value)
         if self.field_type in [

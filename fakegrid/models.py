@@ -1,5 +1,7 @@
 from os import name
 from typing import Any, Dict, Iterable, List, Optional, Type, Union
+
+import sqlalchemy
 from .schema import ShotgridEntity, ShotgridSchema, camel_case, snake_case, FieldType
 from sqlalchemy.orm import (
     mapped_column,
@@ -40,10 +42,23 @@ from sqlalchemy import (
     update,
 )
 
+
+class LimitedLengthString(sqlalchemy.types.TypeDecorator):
+    impl = sqlalchemy.types.String
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        return value[: self.impl.length]
+
+    def copy(self, **kwargs):
+        return LimitedLengthString(self.impl.length)
+
+
 INDEX_FIELDS = ["code", "id", "name", "type", "sg_status_list"]
 
 FIELD_TYPES_TO_SQL_ALCHEMY_TYPES = {
-    FieldType.Text: Text(collation="NOCASE"),
+    FieldType.Text: Text(),
     FieldType.Float: Float,
     FieldType.MultiEntity: None,
     FieldType.Number: Integer,
@@ -55,13 +70,13 @@ FIELD_TYPES_TO_SQL_ALCHEMY_TYPES = {
     FieldType.DateTime: DateTime,
     FieldType.Duration: Integer,
     FieldType.Entity: None,
-    FieldType.Footage: String,
-    FieldType.Image: String,
-    FieldType.List: String(255, collation="NOCASE"),
+    FieldType.Footage: LimitedLengthString(255),
+    FieldType.Image: LimitedLengthString(255),
+    FieldType.List: LimitedLengthString(255),
     FieldType.Password: String,
     FieldType.Percent: Integer,
     FieldType.Serializable: Text,
-    FieldType.StatusList: String,
+    FieldType.StatusList: LimitedLengthString(255),
     FieldType.Summary: Text,
     FieldType.TagList: None,
     FieldType.Timecode: Integer,
@@ -192,7 +207,7 @@ def schema_to_models(schema: ShotgridSchema) -> Dict[str, Type[Base]]:
 
             if field.api_name == "id":
                 required = True
-                indexed = True
+                indexed = False
                 kwargs["primary_key"] = True
 
             attributes[
@@ -220,7 +235,7 @@ def schema_to_models(schema: ShotgridSchema) -> Dict[str, Type[Base]]:
                 )
                 name_field_name = f"{field.api_name}_name"
                 attributes[name_field_name] = mapped_column(
-                    String(255, collation="NOCASE"),
+                    LimitedLengthString(255),
                     name=name_field_name,
                     nullable=True,
                     index=False,

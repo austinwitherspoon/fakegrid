@@ -28,6 +28,7 @@ from sqlalchemy import (
     not_,
     or_,
     select,
+    text,
 )
 from shotgun_api3 import Fault, sg_timezone
 from sqlalchemy.sql import functions
@@ -243,105 +244,20 @@ class Fakegrid:
         include_archived_projects=True,
         additional_filter_presets=None,
     ):
-        """
-        Find entities matching the given filters.
-
-            >>> # Find Character Assets in Sequence 100_FOO
-            >>> # -------------
-            >>> fields = ['id', 'code', 'sg_asset_type']
-            >>> sequence_id = 2 # Sequence "100_FOO"
-            >>> project_id = 4 # Demo Project
-            >>> filters = [
-            ...     ['project', 'is', {'type': 'Project', 'id': project_id}],
-            ...     ['sg_asset_type', 'is', 'Character'],
-            ...     ['sequences', 'is', {'type': 'Sequence', 'id': sequence_id}]
-            ... ]
-            >>> assets= sg.find("Asset",filters,fields)
-            [{'code': 'Gopher', 'id': 32, 'sg_asset_type': 'Character', 'type': 'Asset'},
-             {'code': 'Cow', 'id': 33, 'sg_asset_type': 'Character', 'type': 'Asset'},
-             {'code': 'Bird_1', 'id': 35, 'sg_asset_type': 'Character', 'type': 'Asset'},
-             {'code': 'Bird_2', 'id': 36, 'sg_asset_type': 'Character', 'type': 'Asset'},
-             {'code': 'Bird_3', 'id': 37, 'sg_asset_type': 'Character', 'type': 'Asset'},
-             {'code': 'Raccoon', 'id': 45, 'sg_asset_type': 'Character', 'type': 'Asset'},
-             {'code': 'Wet Gopher', 'id': 149, 'sg_asset_type': 'Character', 'type': 'Asset'}]
-
-        You can drill through single entity links to filter on fields or display linked fields.
-        This is often called "deep linking" or using "dot syntax".
-
-            .. seealso:: :ref:`filter_syntax`
-
-            >>> # Find Versions created by Tasks in the Animation Pipeline Step
-            >>> # -------------
-            >>> fields = ['id', 'code']
-            >>> pipeline_step_id = 2 # Animation Step ID
-            >>> project_id = 4 # Demo Project
-            >>> # you can drill through single-entity link fields
-            >>> filters = [
-            ...     ['project','is', {'type': 'Project','id': project_id}],
-            ...     ['sg_task.Task.step.Step.id', 'is', pipeline_step_id]
-            >>> ]
-            >>> sg.find("Version", filters, fields)
-            [{'code': 'scene_010_anim_v001', 'id': 42, 'type': 'Version'},
-             {'code': 'scene_010_anim_v002', 'id': 134, 'type': 'Version'},
-             {'code': 'bird_v001', 'id': 137, 'type': 'Version'},
-             {'code': 'birdAltBlue_v002', 'id': 236, 'type': 'Version'}]
-
-        :param str entity_type: Shotgun entity type to find.
-        :param list filters: list of filters to apply to the query.
-
-            .. seealso:: :ref:`filter_syntax`
-
-        :param list fields: Optional list of fields to include in each entity record returned.
-            Defaults to ``["id"]``.
-        :param list order: Optional list of dictionaries defining how to order the results of the
-            query. Each dictionary contains the ``field_name`` to order by and  the ``direction``
-            to sort::
-
-                [{'field_name':'foo', 'direction':'asc'}, {'field_name':'bar', 'direction':'desc'}]
-
-            Defaults to sorting by ``id`` in ascending order.
-        :param str filter_operator: Operator to apply to the filters. Supported values are ``"all"``
-            and ``"any"``. These are just another way of defining if the query is an AND or OR
-            query. Defaults to ``"all"``.
-        :param int limit: Optional limit to the number of entities to return. Defaults to ``0`` which
-            returns all entities that match.
-        :param int page: Optional page of results to return. Use this together with the ``limit``
-            parameter to control how your query results are paged. Defaults to ``0`` which returns
-            all entities that match.
-        :param bool retired_only: Optional boolean when ``True`` will return only entities that have
-            been retried. Defaults to ``False`` which returns only entities which have not been
-            retired. There is no option to return both retired and non-retired entities in the
-            same query.
-        :param bool include_archived_projects: Optional boolean flag to include entities whose projects
-            have been archived. Defaults to ``True``.
-        :param additional_filter_presets: Optional list of presets to further filter the result
-            set, list has the form::
-
-                [{"preset_name": <preset_name>, <optional_param1>: <optional_value1>, ... }]
-
-            Note that these filters are ANDed together and ANDed with the 'filter'
-            argument.
-
-            For details on supported presets and the format of this parameter see
-            :ref:`additional_filter_presets`
-        :returns: list of dictionaries representing each entity with the requested fields, and the
-            defaults ``"id"`` and ``"type"`` which are always included.
-        :rtype: list
-        """
         if entity_type not in self._fakegrid_models:
             raise Fault(f'API read() invalid entity type "{entity_type}"')
         model = self._fakegrid_models[entity_type]
         fields = fields or []
 
-        _fields, _filters, joins = self._resolve_fields(model, fields, filters)
+        _fields, _filters, joins = self._resolve_fields(model, fields, [])
 
-        wheres, new_joins = self._build_wheres_and_joins(entity_type, _filters)
+        wheres, new_joins = self._build_wheres_and_joins(entity_type, filters)
         joins.extend(new_joins)
         print(_fields, _filters, joins)
 
         fields_to_query: List[Tuple[str, Any, Optional[ShotgridField]]] = [
-            ("id", model.id, model._entity.fields["id"]),
-            ("type", literal_column(f'"{model._entity.api_name}"').label("type"), None),
+            ("id", getattr(model, "id"), model._entity.fields["id"]),
+            ("type", literal_column(f"'{model._entity.api_name}'").label("type"), None),
         ]  # type:ignore
         for alias_and_field in _fields:
             requested_field, alias, field_name, parent_model = alias_and_field
@@ -511,82 +427,231 @@ class Fakegrid:
             )
         # otherwise we have a single filter!
         else:
-            field_tuple, operator, *values = filters
+            field, operator, *values = filters
 
-            original, alias, field, parent_model = field_tuple
+            # field_schema = alias._entity.fields[field]
+            # if isinstance(values[0], list):
+            #     values = [[field_schema.to_database(i) for i in v] for v in values]
+            # else:
+            #     values = [field_schema.to_database(i) for i in values]
 
-            field_schema = alias._entity.fields[field]
-            if isinstance(values[0], list):
-                values = [[field_schema.to_database(i) for i in v] for v in values]
-            else:
-                values = [field_schema.to_database(i) for i in values]
+            # actual_field_name = original.split(".")[-1]
+            # actual_entity_type = (
+            #     original.split(".")[-2] if "." in original else entity_type
+            # )
+            # actual_schema = self._fakegrid_schema.entities[actual_entity_type].fields[
+            #     actual_field_name
+            # ]
+            parent_model = self._fakegrid_models[entity_type]
 
-            actual_field_name = original.split(".")[-1]
-            actual_entity_type = (
-                original.split(".")[-2] if "." in original else entity_type
-            )
-            actual_schema = self._fakegrid_schema.entities[actual_entity_type].fields[
-                actual_field_name
-            ]
-
-            wheres.append(
-                self._apply_operator(
-                    field_schema, alias, operator, values, actual_schema, parent_model
-                )
-            )
+            wheres.append(self._apply_operator(field, parent_model, operator, values))
 
         return wheres, joins
 
-    """
-    Operator                    Arguments
---------                    ---------
-'is'                        [field_value] | None
-'is_not'                    [field_value] | None
-'less_than'                 [field_value] | None
-'greater_than'              [field_value] | None
-'contains'                  [field_value] | None
-'not_contains'              [field_value] | None
-'starts_with'               [string]
-'ends_with'                 [string]
-'between'                   [[field_value] | None, [field_value] | None]
-'not_between'               [[field_value] | None, [field_value] | None]
-'in_last'                   [[int], 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR']
-                                   # note that brackets are not literal (eg. ['start_date', 'in_last', 1, 'DAY'])
-'in_next'                   [[int], 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR']
-                                   # note that brackets are not literal (eg. ['start_date', 'in_next', 1, 'DAY'])
-'in'                        [[field_value] | None, ...] # Array of field values
-'type_is'                   [string] | None             # Shotgun entity type
-'type_is_not'               [string] | None             # Shotgun entity type
-'in_calendar_day'           [int]                       # Offset (e.g. 0 = today, 1 = tomorrow,
-                                                        # -1 = yesterday)
-'in_calendar_week'          [int]                       # Offset (e.g. 0 = this week, 1 = next week,
-                                                        # -1 = last week)
-'in_calendar_month'         [int]                       # Offset (e.g. 0 = this month, 1 = next month,
-                                                        # -1 = last month)
-'name_contains'             [string]
-'name_not_contains'         [string]
-'name_starts_with'          [string]
-'name_ends_with'            [string]
-    """
-
     def _apply_operator(
         self,
-        field_schema: ShotgridField,
+        field: str,
         model: Type[Base],
         operator: str,
         value: Any,
-        actual_schema: Optional[ShotgridField] = None,
-        parent_model: Optional[Type[Base]] = None,
     ) -> ClauseElement:
-        actual_schema = actual_schema or field_schema
-        parent_model = parent_model or model
-        field = getattr(model, field_schema.api_name)
+        negative_operators = {
+            "is_not": "is",
+            "not_in": "in",
+            "not_contains": "contains",
+            "not_between": "between",
+            "type_is_not": "type_is",
+            "name_not_contains": "name_contains",
+            "not_in_next": "in_next",
+            "not_in_last": "in_last",
+        }
+        if operator in negative_operators:
+            operator = negative_operators[operator]
+            return not_(
+                self._apply_operator(field, model, operator, value)
+            )  # type:ignore
 
-        valid_operators = ALLOWED_OPERATIONS_BY_FIELD_TYPE[actual_schema.field_type]
+        if "." in field:
+            field_parts = field.split(".")
+            nested_fields = [
+                (
+                    field_parts[i],
+                    field_parts[i + 1] if len(field_parts) > i + 1 else None,
+                )
+                for i in range(0, len(field_parts), 2)
+            ]
+            next_field, next_entity_type = next(iter(nested_fields))
+
+            if next_entity_type:
+                try:
+                    next_model = self._fakegrid_models[next_entity_type]
+                except KeyError:
+                    raise Fault(
+                        f"API read() {model._entity.api_name}.{next_field} is not a valid relation."
+                    )
+
+                if not model._entity.fields.get(next_field, None):
+                    raise Fault(
+                        f"API read() {model._entity.api_name}.{next_field} doesn't exist."
+                    )
+                if model._entity.fields[next_field].field_type not in [
+                    FieldType.Entity,
+                    FieldType.MultiEntity,
+                    FieldType.Addressing,
+                    FieldType.TagList,
+                ]:
+                    raise Fault(
+                        f"API read() {model._entity.api_name}.{field} is not a valid relation."
+                    )
+
+                if model._entity.fields[next_field].field_type in [
+                    FieldType.MultiEntity,
+                    FieldType.Addressing,
+                    FieldType.TagList,
+                ]:
+                    connection_entity = model._entity.fields[
+                        next_field
+                    ].connection_entity or next(
+                        iter(
+                            (i.entity, i.api_name)
+                            for i in model._entity.fields[next_field].parent_of or []
+                            if i.entity.api_name == next_entity_type
+                        ),
+                        None,
+                    )
+                    if not connection_entity:
+                        raise Fault(
+                            f"API read() {model._entity.api_name}.{field} is not a valid relation."
+                        )
+                    conn_model = self._fakegrid_models[connection_entity[0].api_name]
+                    conn_alias = aliased(conn_model)
+                    conn_field = conn_model._entity.fields[connection_entity[1]]
+                    opposite_field = conn_field.connection_query_target_field
+
+                    field = ".".join(
+                        ".".join([i for i in f if i]) for f in nested_fields[1:]
+                    )
+                    if opposite_field:
+                        field = f"{opposite_field.api_name}.{next_entity_type}.{field}"
+
+                    inner_where = self._apply_operator(
+                        field, conn_alias, operator, value
+                    )
+                    origin_model_id = getattr(model, "id")
+                    conn_model_id = getattr(conn_alias, f"{conn_field.api_name}_id")
+                    conn_model_type = getattr(conn_alias, f"{conn_field.api_name}_type")
+
+                    outer_where = (
+                        select(text("NULL"))
+                        .select_from(conn_alias)
+                        .where(
+                            and_(
+                                conn_model_id == origin_model_id,
+                                conn_model_type == model._entity.api_name,
+                                inner_where,
+                            )
+                        )
+                        .exists()
+                    )
+                    return outer_where
+
+                # handle single entity link
+                alias = aliased(next_model)
+
+                # reconstruct the field, minus the one we're currently deconstructing
+                field = ".".join(
+                    ".".join([i for i in f if i]) for f in nested_fields[1:]
+                )
+                inner_where = self._apply_operator(field, alias, operator, value)
+
+                id_field = getattr(model, f"{next_field}_id")
+                type_field = getattr(model, f"{next_field}_type")
+
+                outer_where = and_(
+                    select(text("NULL"))
+                    .select_from(alias)
+                    .where(
+                        and_(
+                            id_field == getattr(alias, "id"),
+                            inner_where,
+                        )
+                    )
+                    .exists(),
+                    type_field == next_entity_type,
+                )
+
+                return outer_where
+
+            else:
+                where = self._apply_operator(next_field, model, operator, value)
+                return where
+
+        field_schema = model._entity.fields.get(field)
+        if not field_schema and field != "{self}":
+            raise Fault(f"API read() {model._entity.api_name}.{field} doesn't exist.")
+
+        if field_schema and field_schema.field_type in [
+            FieldType.MultiEntity,
+            FieldType.Addressing,
+            FieldType.TagList,
+        ]:
+            connection_entity = field_schema.connection_entity or (
+                (field_schema.reverse_of.entity, field_schema.reverse_of.api_name)
+                if field_schema.reverse_of
+                else None
+            )
+            if not connection_entity:
+                raise Fault(
+                    f"API read() {model._entity.api_name}.{field} is not a valid relation."
+                )
+            conn_model = self._fakegrid_models[connection_entity[0].api_name]
+            conn_alias = aliased(conn_model)
+            conn_field = conn_model._entity.fields[connection_entity[1]]
+            opposite_field = conn_field.connection_query_target_field
+
+            if opposite_field:
+                inner_where = self._apply_operator(
+                    opposite_field.api_name, conn_alias, operator, value
+                )
+            else:
+                inner_where = self._apply_operator(
+                    "{self}", conn_alias, operator, value
+                )
+
+            origin_model_id = getattr(model, "id")
+            conn_model_id = getattr(
+                conn_alias, f"{conn_field.api_name}_id", getattr(conn_alias, "id")
+            )
+            conn_model_type = getattr(
+                conn_alias,
+                f"{conn_field.api_name}_type",
+                literal_column(f"'{conn_field.entity.api_name}'"),
+            )
+
+            where = (
+                select(text("NULL"))
+                .select_from(conn_alias)
+                .where(
+                    and_(
+                        conn_model_id == origin_model_id,
+                        conn_model_type == model._entity.api_name,
+                        inner_where,
+                    )
+                )
+                .exists()
+            )
+            return where
+
+        sql_field = getattr(model, field_schema.api_name) if field_schema else None
+        field_type = field_schema.field_type if field_schema else FieldType.Entity
+        entity_name = (
+            field_schema.entity.api_name if field_schema else model._entity.api_name
+        )
+        valid_operators = ALLOWED_OPERATIONS_BY_FIELD_TYPE[field_type]
         if operator not in valid_operators:
             raise Fault(
-                f"API read() {actual_schema.entity.api_name}.{actual_schema.api_name}'s "
-                f"'{actual_schema.field_type.value}' data type doesn't support "
+                f"API read() {entity_name}.{field}'s "
+                f"'{field_type.value}' data type doesn't support "
                 f"'{operator}' 'relation':\n"
                 f"Valid relations are: [{', '.join(valid_operators)}]"
             )
@@ -594,247 +659,75 @@ class Fakegrid:
         if not isinstance(value[0], list) and operator in ["in", "not_in"]:
             operator = {"in": "is", "not_in": "is_not"}[operator]
 
-        if actual_schema.field_type == FieldType.Entity:
-            id_field = getattr(model, f"{actual_schema.api_name}_id")
-            type_field = getattr(model, f"{actual_schema.api_name}_type")
-            name_field = getattr(model, f"{actual_schema.api_name}_name")
+        value = field_schema.to_database(value) if field_schema else value
+
+        if field_type == FieldType.Entity:
+            if field_schema:
+                id_field = getattr(model, f"{field_schema.api_name}_id")
+                type_field = getattr(model, f"{field_schema.api_name}_type")
+                name_field = getattr(model, f"{field_schema.api_name}_name")
+            else:
+                id_field = getattr(model, "id")
+                type_field = literal_column(f"'{model._entity.api_name}'")
+                name_field = (
+                    getattr(model, model._entity.name_field)
+                    if model._entity.name_field
+                    else literal_column("NULL")
+                )
             if operator == "is":
                 if value[0] is None:
                     return and_(id_field == None, type_field == None)
                 return and_(
                     id_field == value[0]["id"],
                     type_field == value[0]["type"],
-                )
-            elif operator == "is_not":
-                if value[0] is None:
-                    return or_(
-                        id_field != None,
-                        type_field != None,
-                    )
-                return or_(
-                    id_field != value[0]["id"],
-                    type_field != value[0]["type"],
-                    id_field == None,
-                    type_field == None,
+                    id_field != None,
+                    type_field != None,
                 )
             elif operator == "type_is":
                 if value[0] is None:
                     return type_field == None
                 return type_field == value[0]
-            elif operator == "type_is_not":
-                if value[0] is None:
-                    return type_field != None
-                return or_(type_field != value[0], type_field == None)
             elif operator == "name_contains":
-                return name_field.like(f"%{value[0]}%")
-            elif operator == "name_not_contains":
-                return or_(name_field.notlike(f"%{value[0]}%"), name_field == None)
+                return and_(name_field.like(f"%{value[0]}%"), name_field != None)
             elif operator == "name_is":
-                return name_field == value[0]
+                return and_(name_field == value[0], name_field != None)
             elif operator == "in":
-                return or_(
-                    *[
-                        and_(
-                            id_field == i["id"],
-                            type_field == i["type"],
-                        )
-                        if i
-                        else and_(id_field == None, type_field == None)
-                        for i in value[0]
-                    ]
-                )
-            elif operator == "not_in":
-                return or_(
-                    field == None,
-                    and_(
+                return and_(
+                    or_(
                         *[
-                            or_(
-                                id_field != i["id"],
-                                type_field != i["type"],
-                                id_field == None,
-                                type_field == None,
+                            and_(
+                                id_field == i["id"],
+                                type_field == i["type"],
                             )
                             if i
-                            else or_(id_field == None, type_field == None)
+                            else and_(id_field == None, type_field == None)
                             for i in value[0]
                         ]
                     ),
-                )
-        elif actual_schema.field_type in [
-            FieldType.MultiEntity,
-            FieldType.Addressing,
-            FieldType.TagList,
-        ]:
-            if isinstance(value[0], list) and operator in ["is", "is_not"]:
-                raise Fault(
-                    f"API read() '{operator}' 'relation' expects a 1-element array:\n"
-                    f"{value[0]}"
-                )
-
-            if field_schema.api_name == "id":
-                id_field = getattr(model, "id")
-                type_field = literal_column(f'"{model._entity.api_name}"')
-                name_field = (
-                    getattr(model, model._entity.name_field)
-                    if model._entity.name_field
-                    else literal_column("NULL")
-                )
-                assert actual_schema.reverse_of
-                connection_field = actual_schema.reverse_of.api_name
-                raw_connection_model = self._fakegrid_models[model._entity.api_name]
-                value_id_field = getattr(raw_connection_model, "id")
-                value_type_field = type_field
-                value_name_field = (
-                    getattr(
-                        raw_connection_model, raw_connection_model._entity.name_field
-                    )
-                    if raw_connection_model._entity.name_field
-                    else literal_column("NULL")
-                )
-            else:
-                id_field = getattr(model, f"{field_schema.api_name}_id")
-                type_field = getattr(model, f"{field_schema.api_name}_type")
-                name_field = getattr(model, f"{field_schema.api_name}_name")
-                assert actual_schema.connection_entity
-                connection, connection_field = actual_schema.connection_entity
-
-                opposite_field = connection.fields[
-                    connection_field
-                ].connection_query_target_field
-                assert opposite_field
-                raw_connection_model = self._fakegrid_models[
-                    actual_schema.connection_entity[0].api_name
-                ]
-                value_id_field = getattr(
-                    raw_connection_model, f"{opposite_field.api_name}_id"
-                )
-                value_type_field = getattr(
-                    raw_connection_model, f"{opposite_field.api_name}_type"
-                )
-                value_name_field = getattr(
-                    raw_connection_model, f"{opposite_field.api_name}_name"
-                )
-
-            if operator == "is":
-                return and_(
-                    id_field == value[0]["id"],
-                    type_field == value[0]["type"],
-                )
-            elif operator == "is_not":
-                return not_(
-                    select(getattr(raw_connection_model, "id"))
-                    .select_from(raw_connection_model)
-                    .where(
-                        and_(
-                            value_id_field == value[0]["id"],
-                            value_type_field == value[0]["type"],
-                            getattr(raw_connection_model, f"{connection_field}_id")
-                            == getattr(parent_model, "id"),
-                            getattr(raw_connection_model, f"{connection_field}_type")
-                            == parent_model._entity.api_name,
-                            getattr(raw_connection_model, "is_retired") == False,
-                        )
-                    )
-                    .exists()
-                )
-            elif operator == "type_is":
-                return and_(type_field == value[0], id_field != None)
-            elif operator == "type_is_not":
-                return not_(
-                    select(getattr(raw_connection_model, "id"))
-                    .select_from(raw_connection_model)
-                    .where(
-                        and_(
-                            value_type_field == value[0],
-                            getattr(raw_connection_model, f"{connection_field}_id")
-                            == getattr(parent_model, "id"),
-                            getattr(raw_connection_model, f"{connection_field}_type")
-                            == parent_model._entity.api_name,
-                            getattr(raw_connection_model, "is_retired") == False,
-                        )
-                    )
-                    .exists()
-                )
-            elif operator == "name_contains":
-                return name_field.like(f"%{value[0]}%")
-            elif operator == "name_not_contains":
-                return not_(
-                    select(getattr(raw_connection_model, "id"))
-                    .select_from(raw_connection_model)
-                    .where(
-                        and_(
-                            value_name_field.like(f"%{value[0]}%"),
-                            getattr(raw_connection_model, f"{connection_field}_id")
-                            == getattr(parent_model, "id"),
-                            getattr(raw_connection_model, f"{connection_field}_type")
-                            == parent_model._entity.api_name,
-                            getattr(raw_connection_model, "is_retired") == False,
-                        )
-                    )
-                    .exists()
-                )
-            elif operator == "name_is":
-                return name_field == value[0]
-            elif operator == "in":
-                return or_(
-                    *[
-                        and_(
-                            id_field == i["id"],
-                            type_field == i["type"],
-                        )
-                        for i in value[0]
-                    ]
-                )
-            elif operator == "not_in":
-                return not_(
-                    select(getattr(raw_connection_model, "id"))
-                    .select_from(raw_connection_model)
-                    .where(
-                        and_(
-                            or_(
-                                *[
-                                    and_(
-                                        value_id_field == i["id"],
-                                        value_type_field == i["type"],
-                                    )
-                                    for i in value[0]
-                                ]
-                            ),
-                            getattr(raw_connection_model, f"{connection_field}_id")
-                            == getattr(parent_model, "id"),
-                            getattr(raw_connection_model, f"{connection_field}_type")
-                            == parent_model._entity.api_name,
-                            getattr(raw_connection_model, "is_retired") == False,
-                        )
-                    )
-                    .exists()
+                    id_field != None,
+                    type_field != None,
                 )
         else:
+            assert sql_field
             if operator == "is":
-                return field == value[0]
-            elif operator == "is_not":
-                return or_(field != value[0], field == None)
+                return and_(sql_field == value[0], sql_field != None)
+            elif operator == "in":
+                return and_(or_(*[sql_field == i for i in value[0]]), sql_field != None)
             elif operator == "less_than":
-                return field < value[0]
+                return and_(sql_field < value[0], sql_field != None)
             elif operator == "greater_than":
-                return field > value[0]
+                return and_(sql_field > value[0], sql_field != None)
             elif operator == "contains":
-                return field.like(f"%{value[0]}%")
-            elif operator == "not_contains":
-                return or_(field.notlike(f"%{value[0]}%"), field == None)
+                return and_(sql_field.like(f"%{value[0]}%"), sql_field != None)
             elif operator == "starts_with":
-                return field.like(f"{value[0]}%")
+                return and_(sql_field.like(f"{value[0]}%"), sql_field != None)
             elif operator == "ends_with":
-                return field.like(f"%{value[0]}")
+                return and_(sql_field.like(f"%{value[0]}"), sql_field != None)
             elif operator == "between":
                 if isinstance(value[0], list):
                     value = value[0]
-                return field.between(value[0], value[1])
-            elif operator == "not_between":
-                if isinstance(value[0], list):
-                    value = value[0]
-                return or_(field.notbetween(value[0], value[1]), field == None)
-            elif operator in ["in_last", "not_in_last"]:
+                return and_(sql_field.between(value[0], value[1]), sql_field != None)
+            elif operator in ["in_last"]:
                 amount, unit = value
                 if not isinstance(amount, (int, float)):
                     raise Fault(
@@ -854,15 +747,13 @@ class Fakegrid:
                     hours = amount * 24 * 30
                 elif unit == "YEAR":
                     hours = amount * 24 * 365
-                clause = and_(
-                    field
+                return and_(
+                    sql_field
                     >= datetime.datetime.utcnow() - datetime.timedelta(hours=hours),
-                    field <= datetime.datetime.utcnow(),
+                    sql_field <= datetime.datetime.utcnow(),
+                    sql_field != None,
                 )
-                if operator == "not_in_last":
-                    clause = not_(clause)
-                return clause
-            elif operator in ["in_next", "not_in_next"]:
+            elif operator in ["in_next"]:
                 amount, unit = value
                 if not isinstance(amount, (int, float)):
                     raise Fault(
@@ -883,13 +774,12 @@ class Fakegrid:
                 elif unit == "YEAR":
                     hours = amount * 24 * 365
 
-                clause = and_(
-                    field
+                return and_(
+                    sql_field
                     <= datetime.datetime.utcnow() + datetime.timedelta(hours=hours),
-                    field >= datetime.datetime.utcnow(),
+                    sql_field >= datetime.datetime.utcnow(),
+                    sql_field != None,
                 )
-                if operator == "not_in_next":
-                    clause = not_(clause)
             elif operator == "in_calendar_day":
                 amount = value[0]
                 if not isinstance(amount, (int, float)):
@@ -904,7 +794,9 @@ class Fakegrid:
                 end_of_day = day.replace(
                     hour=23, minute=59, second=59, microsecond=999999
                 )
-                return field.between(start_of_day, end_of_day)
+                return and_(
+                    sql_field.between(start_of_day, end_of_day), sql_field != None
+                )
             elif operator == "in_calendar_week":
                 amount = value[0]
                 if not isinstance(amount, (int, float)):
@@ -918,7 +810,9 @@ class Fakegrid:
                 start_of_week = week - datetime.timedelta(days=week.weekday())
                 # get the end of the week
                 end_of_week = start_of_week + datetime.timedelta(days=6)
-                return field.between(start_of_week, end_of_week)
+                return and_(
+                    sql_field.between(start_of_week, end_of_week), sql_field != None
+                )
             elif operator == "in_calendar_month":
                 amount = value[0]
                 if not isinstance(amount, (int, float)):
@@ -941,12 +835,10 @@ class Fakegrid:
                     second=59,
                     microsecond=999999,
                 )
-                return field.between(start_of_month, end_of_month)
+                return and_(
+                    sql_field.between(start_of_month, end_of_month), sql_field != None
+                )
 
-            elif operator == "in":
-                return or_(*[field == i for i in value[0]])
-            elif operator == "not_in":
-                return or_(and_(*[field != i for i in value[0]]), field == None)
             else:
                 raise NotImplementedError(f"Unsupported operator: {operator}")
 
