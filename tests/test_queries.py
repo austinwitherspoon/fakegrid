@@ -471,9 +471,20 @@ def test_queries(entity_type, filters, fields, sg):
     except Exception as e:
         our_result = e
     if isinstance(expected_result, Exception):
-        assert type(our_result) == type(expected_result)
+        if not type(our_result) == type(expected_result):
+            raise AssertionError(
+                f"Expected exception {repr(expected_result)} but got exception {repr(our_result)}"
+            ) from our_result
     else:
-        assert our_result == expected_result
+        if not our_result == expected_result:
+            if isinstance(our_result, Exception):
+                raise AssertionError(
+                    f"Expected {repr(expected_result)} but got exception {repr(our_result)}"
+                ) from our_result
+            else:
+                raise AssertionError(
+                    f"Expected {repr(expected_result)} but got {repr(our_result)}"
+                )
 
 
 # Running this file directly will regenerate test results

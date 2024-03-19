@@ -45,6 +45,7 @@ from sqlalchemy import (
 
 class LimitedLengthString(sqlalchemy.types.TypeDecorator):
     impl = sqlalchemy.types.String
+    cache_ok = True
 
     def process_bind_param(self, value, dialect):
         if value is None:

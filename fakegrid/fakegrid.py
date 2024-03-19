@@ -677,6 +677,15 @@ class Fakegrid:
             if operator == "is":
                 if value[0] is None:
                     return and_(id_field == None, type_field == None)
+                if isinstance(value[0], list):
+                    if len(value[0]) > 1:
+                        raise Fault(
+                            f'API read() \'is\' \'relation\' expects a 1-element array:\n{value[0]}'
+                        )
+                    elif len(value[0]) == 0:
+                        return and_(id_field == None, type_field == None)
+                    else:
+                        value = value[0]
                 return and_(
                     id_field == value[0]["id"],
                     type_field == value[0]["type"],
@@ -710,6 +719,8 @@ class Fakegrid:
         else:
             assert sql_field
             if operator == "is":
+                if value[0] is None:
+                    return sql_field == None
                 return and_(sql_field == value[0], sql_field != None)
             elif operator == "in":
                 return and_(or_(*[sql_field == i for i in value[0]]), sql_field != None)
@@ -837,6 +848,17 @@ class Fakegrid:
                 )
                 return and_(
                     sql_field.between(start_of_month, end_of_month), sql_field != None
+                )
+            elif operator == "in_calendar_year":
+                amount = value[0]
+                if not isinstance(amount, int):
+                    raise Fault(
+                        f"API read() 'in_calendar_year' 'relation' expects an integer:\n{amount}"
+                    )
+                start_of_year = datetime.datetime(amount, 1, 1, 0, 0, 0, 0)
+                end_of_year = datetime.datetime(amount, 12, 31, 23, 59, 59, 999999)
+                return and_(
+                    sql_field.between(start_of_year, end_of_year), sql_field != None
                 )
 
             else:

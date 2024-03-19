@@ -789,7 +789,10 @@ class ShotgridField:
                 return value
             if isinstance(value, int):
                 return value
-            return datetime.datetime.strptime(value, "%Y-%m-%d").date()
+            try:
+                return datetime.datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                return value
         if self.field_type == FieldType.DateTime:
             # convert to utc
             return value
