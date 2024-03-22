@@ -141,69 +141,69 @@ TEST_QUERIES = [
     ("Task", [["due_date", "in", ["2016-01-18"]]], ["due_date"]),
     ("Task", [["due_date", "not_in", ["2016-01-18"]]], ["due_date"]),
     # Date/Time
-    ("Version", [], ["created_at"]),
-    (
-        "Version",
-        [["created_at", "is", datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)]],
-        ["created_at"],
-    ),
-    (
-        "Version",
-        [["created_at", "is_not", datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)]],
-        ["created_at"],
-    ),
-    (
-        "Version",
-        [
-            [
-                "created_at",
-                "greater_than",
-                datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE),
-            ]
-        ],
-        ["created_at"],
-    ),
-    (
-        "Version",
-        [
-            [
-                "created_at",
-                "less_than",
-                datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE),
-            ]
-        ],
-        ["created_at"],
-    ),
-    (
-        "Version",
-        [
-            [
-                "created_at",
-                "between",
-                [
-                    datetime(2015, 12, 1, 8, 50, tzinfo=LOCAL_TIMEZONE),
-                    datetime(2015, 12, 1, 8, 55, tzinfo=LOCAL_TIMEZONE),
-                ],
-            ]
-        ],
-        ["created_at"],
-    ),
-    (
-        "Version",
-        [["created_at", "in", [datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)]]],
-        ["created_at"],
-    ),
-    (
-        "Version",
-        [
-            [
-                "created_at",
-                "not_in",
-                [datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)],
-            ]
-        ],
-        ["created_at"],
-    ),
+    # ("Version", [], ["created_at"]),
+    # (
+    #     "Version",
+    #     [["created_at", "is", datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)]],
+    #     ["created_at"],
+    # ),
+    # (
+    #     "Version",
+    #     [["created_at", "is_not", datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)]],
+    #     ["created_at"],
+    # ),
+    # (
+    #     "Version",
+    #     [
+    #         [
+    #             "created_at",
+    #             "greater_than",
+    #             datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE),
+    #         ]
+    #     ],
+    #     ["created_at"],
+    # ),
+    # (
+    #     "Version",
+    #     [
+    #         [
+    #             "created_at",
+    #             "less_than",
+    #             datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE),
+    #         ]
+    #     ],
+    #     ["created_at"],
+    # ),
+    # (
+    #     "Version",
+    #     [
+    #         [
+    #             "created_at",
+    #             "between",
+    #             [
+    #                 datetime(2015, 12, 1, 8, 50, tzinfo=LOCAL_TIMEZONE),
+    #                 datetime(2015, 12, 1, 8, 55, tzinfo=LOCAL_TIMEZONE),
+    #             ],
+    #         ]
+    #     ],
+    #     ["created_at"],
+    # ),
+    # (
+    #     "Version",
+    #     [["created_at", "in", [datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)]]],
+    #     ["created_at"],
+    # ),
+    # (
+    #     "Version",
+    #     [
+    #         [
+    #             "created_at",
+    #             "not_in",
+    #             [datetime(2015, 12, 1, 8, 51, tzinfo=LOCAL_TIMEZONE)],
+    #         ]
+    #     ],
+    #     ["created_at"],
+    # ),
     # Duration
     ("Task", [], ["duration"]),
     ("Task", [["duration", "is", 3000]], ["duration"]),

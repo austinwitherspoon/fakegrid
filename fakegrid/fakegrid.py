@@ -127,9 +127,9 @@ class Fakegrid:
             if not entity_name_field:
                 continue
             query = (
-                select(entity_model.id, getattr(entity_model, entity_name_field))
+                select(entity_model.id, getattr(entity_model, entity_name_field)) # type:ignore
                 .select_from(entity_model)
-                .where(entity_model.id.in_(entity_ids.keys()))
+                .where(entity_model.id.in_(entity_ids.keys())) # type:ignore
             )
             for entity_id, entity_name in session.execute(query):
                 entity_names[entity_type][entity_id] = entity_name
@@ -519,6 +519,13 @@ class Fakegrid:
                         ),
                         None,
                     )
+                    reverse_of = model._entity.fields[next_field].reverse_of
+                    if not connection_entity and reverse_of:
+                        connection_entity = (
+                            reverse_of.entity,
+                            reverse_of.api_name,
+                        )
+
                     if not connection_entity:
                         raise Fault(
                             f"API read() {model._entity.api_name}.{field} is not a valid relation."
