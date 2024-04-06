@@ -1,9 +1,8 @@
 import calendar
 import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
 from typing_extensions import Literal
 
-from requests import get
 from .schema import (
     FieldType,
     ShotgridField,
@@ -40,6 +39,9 @@ class Fakegrid:
     _fakegrid_schema: ShotgridSchema
     _fakegrid_models: Dict[str, Type[Base]]
 
+    # This can be replaced for unit tests!
+    _now_function: Callable[[], datetime.datetime] = lambda *_: datetime.datetime.now(datetime.timezone.local)
+
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -57,11 +59,13 @@ class Fakegrid:
         auth_token: Optional[str] = None,
     ):
         self._convert_datetimes_to_utc = convert_datetimes_to_utc
+        if convert_datetimes_to_utc:
+            self._now_function = lambda *_: datetime.datetime.now(sg_timezone.utc)
 
     @classmethod
     def from_schema(cls, schema: ShotgridSchema, engine: Optional[Engine] = None):
         models = schema_to_models(schema)
-        engine = engine or create_engine("sqlite://:memory:")
+        engine = engine or create_engine("sqlite://")
         Base.metadata.create_all(engine)
         _class = cls()
         _class._fakegrid_engine = engine
@@ -225,10 +229,12 @@ class Fakegrid:
                 for i in to_delete:
                     session.delete(i)
 
-        result = instance.to_dict(fields)
         if is_temp_session:
             session.commit()
+            session.flush()
+            session.refresh(instance)
             session.close()
+        result = instance.to_dict(fields)
         return result
 
     def find(
@@ -345,17 +351,6 @@ class Fakegrid:
                 transforms.append((requested_field, lambda x: x))
                 continue
             transform_function = lambda x, schema=field_schema: schema.from_database(x)
-            if field_schema.field_type == FieldType.DateTime:
-                if self._convert_datetimes_to_utc:
-                    # convert server (UTC) to local timezone
-                    transform_function = (
-                        lambda x, func=transform_function: sg_timezone.local.fromutc(
-                            func(x)
-                        )
-                        if x
-                        else x
-                    )
-                    # transform_function = lambda x: x.replace(tzinfo=sg_timezone.local)
             if field_schema.field_type == FieldType.MultiEntity:
                 transform_function = (
                     lambda x, func=transform_function: sorted(
@@ -447,6 +442,10 @@ class Fakegrid:
             wheres.append(self._apply_operator(field, parent_model, operator, values))
 
         return wheres, joins
+    
+    def _now_utc(self):
+        now = self._now_function()
+        return now.astimezone(sg_timezone.utc)
 
     def _apply_operator(
         self,
@@ -668,6 +667,23 @@ class Fakegrid:
 
         value = field_schema.to_database(value) if field_schema else value
 
+        if self._convert_datetimes_to_utc:
+            if field_schema and field_schema.field_type == FieldType.DateTime:
+                for i, v in enumerate(value):
+                    if v:
+                        if isinstance(v, list):
+                            for j, k in enumerate(v):
+                                current = value[i][j]
+                                if isinstance(current, datetime.datetime):
+                                    if current.tzinfo is None:
+                                        current = current.astimezone(sg_timezone.local)
+                                    value[i][j] = current.astimezone(sg_timezone.utc)
+                        else:
+                            if isinstance(v, datetime.datetime):
+                                if v.tzinfo is None:
+                                    v = v.astimezone(sg_timezone.local)
+                                value[i] = v.astimezone(sg_timezone.utc)
+
         if field_type == FieldType.Entity:
             if field_schema:
                 id_field = getattr(model, f"{field_schema.api_name}_id")
@@ -755,6 +771,7 @@ class Fakegrid:
                     raise Fault(
                         f"API read() 'in_last' 'relation' expects a unit of time:\n{unit}"
                     )
+                now = self._now_utc()
                 # convert to hours
                 hours = amount
                 if unit == "DAY":
@@ -767,8 +784,8 @@ class Fakegrid:
                     hours = amount * 24 * 365
                 return and_(
                     sql_field
-                    >= datetime.datetime.utcnow() - datetime.timedelta(hours=hours),
-                    sql_field <= datetime.datetime.utcnow(),
+                    >= now - datetime.timedelta(hours=hours),
+                    sql_field <= now,
                     sql_field != None,
                 )
             elif operator in ["in_next"]:
@@ -791,11 +808,11 @@ class Fakegrid:
                     hours = amount * 24 * 30
                 elif unit == "YEAR":
                     hours = amount * 24 * 365
-
+                now = self._now_utc()
                 return and_(
                     sql_field
-                    <= datetime.datetime.utcnow() + datetime.timedelta(hours=hours),
-                    sql_field >= datetime.datetime.utcnow(),
+                    <= now + datetime.timedelta(hours=hours),
+                    sql_field >= now,
                     sql_field != None,
                 )
             elif operator == "in_calendar_day":
@@ -805,7 +822,7 @@ class Fakegrid:
                         f"API read() 'in_calendar_day' 'relation' expects an integer:\n{amount}"
                     )
                 # offset today by amount days
-                day = datetime.datetime.utcnow() + datetime.timedelta(days=amount)
+                day = self._now_utc() + datetime.timedelta(days=amount)
                 # get the start of the day
                 start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
                 # get the end of the day
@@ -822,7 +839,7 @@ class Fakegrid:
                         f"API read() 'in_calendar_week' 'relation' expects an integer:\n{amount}"
                     )
                 # offset today by amount weeks
-                week = datetime.datetime.utcnow() + datetime.timedelta(weeks=amount)
+                week = self._now_utc() + datetime.timedelta(weeks=amount)
                 week = week.replace(hour=0, minute=0, second=0, microsecond=0)
                 # get the start of the week
                 start_of_week = week - datetime.timedelta(days=week.weekday())
@@ -838,14 +855,14 @@ class Fakegrid:
                         f"API read() 'in_calendar_month' 'relation' expects an integer:\n{amount}"
                     )
                 # offset today by amount months
-                current_month = datetime.datetime.utcnow().month
+                current_month = self._now_utc().month
                 month = int(current_month + amount)
                 # get the start of the month
-                start_of_month = datetime.datetime.utcnow().replace(
+                start_of_month = self._now_utc().replace(
                     month=month, day=1, hour=0, minute=0, second=0, microsecond=0
                 )
                 # get the end of the month
-                end_of_month = datetime.datetime.utcnow().replace(
+                end_of_month = self._now_utc().replace(
                     month=month,
                     day=calendar.monthrange(month, month)[1],
                     hour=23,
@@ -862,8 +879,10 @@ class Fakegrid:
                     raise Fault(
                         f"API read() 'in_calendar_year' 'relation' expects an integer:\n{amount}"
                     )
-                start_of_year = datetime.datetime(amount, 1, 1, 0, 0, 0, 0)
-                end_of_year = datetime.datetime(amount, 12, 31, 23, 59, 59, 999999)
+                current_year = self._now_utc().year
+                year = int(current_year + amount)
+                start_of_year = datetime.datetime(year, 1, 1, 0, 0, 0, 0)
+                end_of_year = datetime.datetime(year, 12, 31, 23, 59, 59, 999999)
                 return and_(
                     sql_field.between(start_of_year, end_of_year), sql_field != None
                 )

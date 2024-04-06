@@ -4,7 +4,7 @@ import json
 from os import PathLike
 import os
 import pickle
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple, Union, TYPE_CHECKING
 from typing_extensions import Self
 from enum import Enum
 import re
@@ -794,7 +794,7 @@ class ShotgridField:
             except ValueError:
                 return value
         if self.field_type == FieldType.DateTime:
-            # convert to utc
+
             return value
 
         if self.field_type in [FieldType.JsonB, FieldType.Serializable, FieldType.Url]:

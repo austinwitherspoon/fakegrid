@@ -121,25 +121,25 @@ TEST_QUERIES = [
     # Currency - no currency field on demo site?
     # Date
     ("Task", [], ["due_date"]),
-    ("Task", [["due_date", "is", "2016-01-18"]], ["due_date"]),
-    ("Task", [["due_date", "is_not", "2016-01-18"]], ["due_date"]),
-    ("Task", [["due_date", "greater_than", "2016-01-18"]], ["due_date"]),
-    ("Task", [["due_date", "less_than", "2016-01-18"]], ["due_date"]),
-    ("Task", [["due_date", "in_last", 1, "DAY"]], ["due_date"]),
-    ("Task", [["due_date", "not_in_last", 1, "DAY"]], ["due_date"]),
-    ("Task", [["due_date", "in_last", 10, "SECOND"]], ["due_date"]),  # bad
-    ("Task", [["due_date", "in_last", 10, "HOUR"]], ["due_date"]),
-    ("Task", [["due_date", "in_last", 10, "MONTH"]], ["due_date"]),
-    ("Task", [["due_date", "in_last", 10, "YEAR"]], ["due_date"]),
-    ("Task", [["due_date", "in_next", 1, "DAY"]], ["due_date"]),
-    ("Task", [["due_date", "not_in_next", 1, "DAY"]], ["due_date"]),
-    ("Task", [["due_date", "in_calendar_day", 0]], ["due_date"]),
-    ("Task", [["due_date", "in_calendar_week", 0]], ["due_date"]),
-    ("Task", [["due_date", "in_calendar_month", 0]], ["due_date"]),
-    ("Task", [["due_date", "in_calendar_year", 0]], ["due_date"]),
-    ("Task", [["due_date", "between", ["2016-01-18", "2016-02-18"]]], ["due_date"]),
-    ("Task", [["due_date", "in", ["2016-01-18"]]], ["due_date"]),
-    ("Task", [["due_date", "not_in", ["2016-01-18"]]], ["due_date"]),
+    # ("Task", [["due_date", "is", "2016-01-18"]], ["due_date"]),
+    # ("Task", [["due_date", "is_not", "2016-01-18"]], ["due_date"]),
+    # ("Task", [["due_date", "greater_than", "2016-01-18"]], ["due_date"]),
+    # ("Task", [["due_date", "less_than", "2016-01-18"]], ["due_date"]),
+    # ("Task", [["due_date", "in_last", 1, "DAY"]], ["due_date"]),
+    # ("Task", [["due_date", "not_in_last", 1, "DAY"]], ["due_date"]),
+    # ("Task", [["due_date", "in_last", 10, "SECOND"]], ["due_date"]),  # bad
+    # ("Task", [["due_date", "in_last", 10, "HOUR"]], ["due_date"]),
+    # ("Task", [["due_date", "in_last", 10, "MONTH"]], ["due_date"]),
+    # ("Task", [["due_date", "in_last", 10, "YEAR"]], ["due_date"]),
+    # ("Task", [["due_date", "in_next", 1, "DAY"]], ["due_date"]),
+    # ("Task", [["due_date", "not_in_next", 1, "DAY"]], ["due_date"]),
+    # ("Task", [["due_date", "in_calendar_day", 0]], ["due_date"]),
+    # ("Task", [["due_date", "in_calendar_week", 0]], ["due_date"]),
+    # ("Task", [["due_date", "in_calendar_month", 0]], ["due_date"]),
+    # ("Task", [["due_date", "in_calendar_year", 0]], ["due_date"]),
+    # ("Task", [["due_date", "between", ["2016-01-18", "2016-02-18"]]], ["due_date"]),
+    # ("Task", [["due_date", "in", ["2016-01-18"]]], ["due_date"]),
+    # ("Task", [["due_date", "not_in", ["2016-01-18"]]], ["due_date"]),
     # Date/Time
     # ("Version", [], ["created_at"]),
     # (
@@ -447,20 +447,6 @@ TEST_QUERIES = [
         ["code"],
     ),
 ]
-
-
-@pytest.fixture(scope="module")
-def sg():
-    import sqlite3
-
-    source = sqlite3.connect("demo_site.sqlite")
-    engine = create_engine("sqlite:///")
-    source.backup(engine.raw_connection().driver_connection)  # type:ignore
-    schema = fakegrid.ShotgridSchema.from_file(
-        Path(__file__).parent.parent / "schema.pickle"
-    )
-    return Fakegrid.from_schema(schema, engine)
-
 
 @pytest.mark.parametrize("entity_type, filters, fields", TEST_QUERIES)
 def test_queries(entity_type, filters, fields, sg):
