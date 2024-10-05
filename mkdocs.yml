@@ -1,0 +1,52 @@
+site_name: fakegrid
+repo_url: https://github.com/austinwitherspoon/fakegrid
+site_url: https://austinwitherspoon.github.io/fakegrid
+site_description: A shotgun/shotgrid/flowpt emulator aiming to be 100% compliant with the real thing. Better than mockgun (obviously!)
+site_author: Austin Witherspoon
+edit_uri: edit/main/docs/
+repo_name: austinwitherspoon/fakegrid
+copyright: Maintained by <a href="https://austinwitherspoon.com">Florian</a>.
+
+nav:
+  - Home: index.md
+  - Modules: modules.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [fakegrid]
+theme:
+  name: material
+  feature:
+    tabs: true
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/austinwitherspoon/fakegrid
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/fakegrid
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
