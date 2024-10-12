@@ -61,6 +61,13 @@ class Entity:
     display_name: str
     fields: list[Field]
 
+    def get_field(self, field_name: str) -> Field:
+        """Get a field by name."""
+        for field in self.fields:
+            if field.api_name == field_name:
+                return field
+        raise ValueError(f"Field {field_name} not found in entity {self.api_name}")
+
 
 @dataclass
 class Field:
@@ -73,11 +80,22 @@ class Field:
 
     link: FieldLink | None
 
+    def reverse_field(self, target_entity_type: str) -> Field | None:
+        """Get the field that links back to this field."""
+        if self.link is None:
+            return None
+        if self.link.parent is not self:
+            return self.link.parent
+        for child in self.link.children:
+            if child.entity.api_name == target_entity_type:
+                return child
+        return None
+
 
 @dataclass
 class FieldLink:
     """A link between two fields."""
 
     parent: Field
-    child: Field
+    children: list[Field]
     connection_entity: Entity | None

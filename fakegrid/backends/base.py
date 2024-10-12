@@ -6,7 +6,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from ..filters import ComplexFilterOperator, FilterOperator, SortDirection
+from ..filters import (
+    ComplexFilter,
+    ComplexFilterOperator,
+    Filter,
+    FilterOperator,
+    SortDirection,
+)
 from ..schema import Entity, Field, Schema
 
 
@@ -17,19 +23,19 @@ class BaseBackend(ABC):
         self.schema = schema
 
     @abstractmethod
-    def find(self, query: Query) -> list[dict[str, Any]]:
+    def find(self, query: BackendQuery) -> list[dict[str, Any]]:
         """Find entities that match the query."""
         pass
 
 
 @dataclass
-class Query:
+class BackendQuery:
     """A query to run against the backend."""
 
     entity: Entity
-    filters: ComplexFilter
+    filters: BackendComplexFilter
     return_fields: list[FieldPath]
-    order: list[QueryOrder]
+    order: list[BackendQueryOrder]
     limit: int | None
     page: int | None
     retired_only: bool
@@ -37,20 +43,43 @@ class Query:
 
 
 @dataclass
-class QueryFilter:
+class BackendFilter:
     """A simple query filter."""
 
     field: FieldPath
     operator: FilterOperator
     value: Any
 
+    @classmethod
+    def from_filter(cls, base_entity: Entity, filter_: Filter) -> BackendFilter:
+        """Adapts a user-facing filter to a more defined filter that the backend can understand."""
+        return BackendFilter(
+            field=FieldPath.from_string(base_entity, filter_.field),
+            operator=filter_.operator,
+            value=filter_.value,
+        )
+
 
 @dataclass
-class ComplexFilter:
+class BackendComplexFilter:
     """A group of simple filters."""
 
     operator: ComplexFilterOperator
-    filters: list[QueryFilter]
+    filters: list[BackendFilter]
+
+    @classmethod
+    def from_filter(cls, base_entity: Entity, filter_: Filter | ComplexFilter) -> BackendComplexFilter:
+        """Adapts a user-facing filter to a more defined filter that the backend can understand."""
+        if isinstance(filter_, Filter):
+            return BackendComplexFilter(
+                operator=ComplexFilterOperator.ALL,
+                filters=[BackendFilter.from_filter(base_entity, filter_)],
+            )
+
+        return BackendComplexFilter(
+            operator=filter_.operator,
+            filters=[BackendFilter.from_filter(base_entity, f) for f in filter_.filters],
+        )
 
 
 @dataclass
@@ -59,6 +88,40 @@ class FieldPath:
 
     pathway: list[FieldLinkedEntity] | None
     destination_field: Field
+
+    @classmethod
+    def from_string(cls, base_entity: Entity, field_path: str) -> FieldPath:
+        """Solve the actual path to a field from a string.
+
+        The input is going to be field_name.EntityType.field_name.EntityType.field_name... etc.
+        Always ending with a field name, so there should always be an odd number of elements.
+        """
+        schema = base_entity.schema
+        field_parts = field_path.split(".")
+
+        current_field_name = field_parts.pop(0)
+        current_field = base_entity.get_field(current_field_name)
+
+        pathway: list[FieldLinkedEntity] = []
+        while field_parts:
+            entity_name = field_parts.pop(0)
+            entity = next(iter(e for e in schema.entities if e.api_name == entity_name))
+
+            # TODO: Validate that the field can point at this entity!
+
+            pathway.append(
+                FieldLinkedEntity(
+                    field=current_field,
+                    destination_entity=entity,
+                )
+            )
+            current_field_name = field_parts.pop(0)
+            current_field = entity.get_field(current_field_name)
+
+        return FieldPath(
+            pathway=pathway,
+            destination_field=current_field,
+        )
 
 
 @dataclass
@@ -70,7 +133,7 @@ class FieldLinkedEntity:
 
 
 @dataclass
-class QueryOrder:
+class BackendQueryOrder:
     """An order to apply to a query."""
 
     field: FieldPath
