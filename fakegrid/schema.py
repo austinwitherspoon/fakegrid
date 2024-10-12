@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -34,157 +37,39 @@ class FieldType(Enum):
     CALCULATED = "calculated"
 
 
-ALLOWED_OPERATIONS_BY_FIELD_TYPE = {
-    FieldType.TEXT: [
-        "is",
-        "is_not",
-        "contains",
-        "not_contains",
-        "starts_with",
-        "ends_with",
-        "in",
-        "not_in",
-    ],
-    FieldType.FLOAT: [
-        "is",
-        "is_not",
-        "greater_than",
-        "less_than",
-        "between",
-        "in",
-        "not_in",
-    ],
-    FieldType.MULTI_ENTITY: [
-        "is",
-        "is_not",
-        "type_is",
-        "type_is_not",
-        "name_contains",
-        "name_not_contains",
-        "name_is",
-        "in",
-        "not_in",
-    ],
-    FieldType.NUMBER: [
-        "is",
-        "is_not",
-        "less_than",
-        "greater_than",
-        "between",
-        "not_between",
-        "in",
-        "not_in",
-    ],
-    FieldType.ADDRESSING: [
-        "is",
-        "is_not",
-        "contains",
-        "not_contains",
-        "in",
-        "type_is",
-        "type_is_not",
-        "name_contains",
-        "name_not_contains",
-        "name_starts_with",
-        "name_ends_with",
-    ],
-    FieldType.CHECKBOX: ["is", "is_not"],
-    FieldType.COLOR: ["is", "is_not", "in", "not_in"],
-    FieldType.CURRENCY: [
-        "is",
-        "is_not",
-        "less_than",
-        "greater_than",
-        "between",
-        "not_between",
-        "in",
-        "not_in",
-    ],
-    FieldType.DATE: [
-        "is",
-        "is_not",
-        "greater_than",
-        "less_than",
-        "in_last",
-        "not_in_last",
-        "in_next",
-        "not_in_next",
-        "in_calendar_day",
-        "in_calendar_week",
-        "in_calendar_month",
-        "in_calendar_year",
-        "between",
-        "in",
-        "not_in",
-    ],
-    FieldType.DATE_TIME: [
-        "is",
-        "is_not",
-        "greater_than",
-        "less_than",
-        "in_last",
-        "not_in_last",
-        "in_next",
-        "not_in_next",
-        "in_calendar_day",
-        "in_calendar_week",
-        "in_calendar_month",
-        "in_calendar_year",
-        "between",
-        "in",
-        "not_in",
-    ],
-    FieldType.DURATION: [
-        "is",
-        "is_not",
-        "greater_than",
-        "less_than",
-        "between",
-        "in",
-        "not_in",
-    ],
-    FieldType.ENTITY: [
-        "is",
-        "is_not",
-        "type_is",
-        "type_is_not",
-        "name_contains",
-        "name_not_contains",
-        "name_is",
-        "in",
-        "not_in",
-    ],
-    FieldType.FOOTAGE: ["is", "is_not"],
-    FieldType.IMAGE: ["is", "is_not"],
-    FieldType.LIST: ["is", "is_not", "in", "not_in"],
-    FieldType.PASSWORD: [],
-    FieldType.PERCENT: [
-        "is",
-        "is_not",
-        "greater_than",
-        "less_than",
-        "between",
-        "in",
-        "not_in",
-    ],
-    FieldType.SERIALIZABLE: [],
-    FieldType.STATUS_LIST: ["is", "is_not", "in", "not_in"],
-    FieldType.SUMMARY: [],
-    FieldType.TAG_LIST: [
-        "is",
-        "is_not",
-        "name_contains",
-        "name_not_contains",
-        "name_id",
-    ],
-    FieldType.TIMECODE: [
-        "is",
-        "is_not",
-        "greater_than",
-        "less_than",
-        "between",
-        "in",
-        "not_in",
-    ],
-    FieldType.URL: [],
-}
+@dataclass
+class Schema:
+    """The schema of an entire shotgrid site."""
+
+    entities: list[Entity]
+
+
+@dataclass
+class Entity:
+    """An entity/table in shotgrid."""
+
+    schema: Schema
+    api_name: str
+    display_name: str
+    fields: list[Field]
+
+
+@dataclass
+class Field:
+    """The metadata that represents a Shotgrid field."""
+
+    entity: Entity
+    api_name: str
+    display_name: str
+    field_type: FieldType
+
+    link: FieldLink | None
+
+
+@dataclass
+class FieldLink:
+    """A link between two fields."""
+
+    parent: Field
+    child: Field
+    connection_entity: Entity | None

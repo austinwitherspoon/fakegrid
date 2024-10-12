@@ -1,8 +1,12 @@
 """Filters and operators for querying data in shotgrid."""
 
+from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from .schema import FieldType
+
+__ALL__ = ["FilterOperator", "ComplexFilterOperator", "Filter", "ComplexFilter"]
 
 
 class FilterOperator(Enum):
@@ -35,6 +39,13 @@ class FilterOperator(Enum):
     NAME_IS = "name_is"
     NAME_STARTS_WITH = "name_starts_with"
     NAME_ENDS_WITH = "name_ends_with"
+
+
+class ComplexFilterOperator(Enum):
+    """Filter operators for grouped filters."""
+
+    ALL = "all"
+    ANY = "any"
 
 
 ALLOWED_OPERATIONS_BY_FIELD_TYPE = {
@@ -206,3 +217,20 @@ ALLOWED_OPERATIONS_BY_FIELD_TYPE = {
     ],
     FieldType.URL: [],
 }
+
+
+@dataclass
+class Filter:
+    """A filter to apply to a query."""
+
+    field: str
+    operator: FilterOperator
+    value: Any
+
+
+@dataclass
+class ComplexFilter:
+    """A group of simple filters."""
+
+    operator: ComplexFilterOperator
+    filters: list[Filter]
