@@ -256,6 +256,9 @@ wheels = [
 name = "fakegrid"
 version = "0.0.1"
 source = { editable = "." }
+dependencies = [
+    { name = "shotgun-api3" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -272,6 +275,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "shotgun-api3", git = "https://github.com/shotgunsoftware/python-api" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -944,6 +948,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/74/be/fc352bd8ca40daae8740b54c1c3e905a7efe470d420a268cd62150248c91/ruff-0.6.9-py3-none-win_amd64.whl", hash = "sha256:785d31851c1ae91f45b3d8fe23b8ae4b5170089021fbb42402d811135f0b7117", size = 9359275 },
     { url = "https://files.pythonhosted.org/packages/3e/14/fd026bc74ded05e2351681545a5f626e78ef831f8edce064d61acd2e6ec7/ruff-0.6.9-py3-none-win_arm64.whl", hash = "sha256:a9641e31476d601f83cd602608739a0840e348bda93fec9f1ee816f8b6798b93", size = 8679879 },
 ]
+
+[[package]]
+name = "shotgun-api3"
+version = "3.6.2"
+source = { git = "https://github.com/shotgunsoftware/python-api#aaed90e4a5c6519dcb4a4ed68d3c89fb96853aea" }
 
 [[package]]
 name = "six"
