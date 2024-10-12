@@ -37,6 +37,14 @@ class FieldType(Enum):
     CALCULATED = "calculated"
 
 
+IGNORED_TYPES = [
+    FieldType.PIVOT_COLUMN,
+    FieldType.CALCULATED,
+    FieldType.SUMMARY,
+    FieldType.JSON_B,
+]
+
+
 @dataclass
 class Schema:
     """The schema of an entire shotgrid site."""
