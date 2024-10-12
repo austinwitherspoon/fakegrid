@@ -234,3 +234,11 @@ class ComplexFilter:
 
     operator: ComplexFilterOperator
     filters: list[Filter]
+
+
+@dataclass
+class SortDirection:
+    """The direction to sort a field."""
+
+    ASCENDING = "asc"
+    DESCENDING = "desc"
