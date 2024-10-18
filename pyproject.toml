@@ -45,6 +45,7 @@ check_untyped_defs = "True"
 warn_return_any = "True"
 warn_unused_ignores = "True"
 show_error_codes = "True"
+exclude = ["^docs", "^tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -94,6 +95,8 @@ ignore = [
     "E731",
     # Avoid specifying long messages outside the exception class
     "TRY003",
+    # assert
+    "S101",
 ]
 
 [tool.ruff.lint.per-file-ignores]

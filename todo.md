@@ -1,0 +1,3 @@
+- Tags, Notes, and Open Notes are all non existent connection tables but should exist
+  - NoteLink table? Taggings table? Should we create these automatically?
+- Fake virtual fields: open_notes, sibling_tasks

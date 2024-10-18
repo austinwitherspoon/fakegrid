@@ -25,7 +25,7 @@ class BaseBackend(ABC):
     @abstractmethod
     def find(self, query: BackendQuery) -> list[dict[str, Any]]:
         """Find entities that match the query."""
-        pass
+        raise NotImplementedError
 
 
 @dataclass
@@ -100,7 +100,7 @@ class FieldPath:
         field_parts = field_path.split(".")
 
         current_field_name = field_parts.pop(0)
-        current_field = base_entity.get_field(current_field_name)
+        current_field = base_entity[current_field_name]
 
         pathway: list[FieldLinkedEntity] = []
         while field_parts:
@@ -110,11 +110,6 @@ class FieldPath:
             if entity is None:
                 raise ValueError(f"Entity {entity_name} not found in schema")
 
-            if not current_field.reverse_field(entity.api_name):
-                raise ValueError(
-                    f"Field {current_field_name} in entity {base_entity.api_name} does not link to entity {entity_name}"
-                )
-
             pathway.append(
                 FieldLinkedEntity(
                     field=current_field,
@@ -122,7 +117,7 @@ class FieldPath:
                 )
             )
             current_field_name = field_parts.pop(0)
-            current_field = entity.get_field(current_field_name)
+            current_field = entity[current_field_name]
 
         return FieldPath(
             pathway=pathway,
