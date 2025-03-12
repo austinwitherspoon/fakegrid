@@ -27,11 +27,6 @@ class JsSchemaEntityFieldData:
     """A single field in shotgun's javascript schema data.
 
     We use this instead of the python API because it contains more information about linked entities.
-
-    What we know:
-     - reverse_fields is filled in on a single entity link, showing all reverse fields.
-     - multi-entity links USUALLY have a through_join_field and through_join_entity_type.
-     - SOMETIMES inverse_association or reverse_of is filled in on either a multi or single entity link
     """
 
     id: int

@@ -97,6 +97,8 @@ ignore = [
     "TRY003",
     # assert
     "S101",
+    # allow type:ignore comments
+    "PGH003",
 ]
 
 [tool.ruff.lint.per-file-ignores]

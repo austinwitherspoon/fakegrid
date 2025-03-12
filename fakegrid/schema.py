@@ -68,6 +68,23 @@ class Schema:
 
     _entity_map: dict[str, Entity] | None = field(init=False, repr=False, default=None)
 
+    def __entity_map__(self) -> dict[str, Entity]:
+        """Get a map of entity names to entities."""
+        if self._entity_map is None:
+            self._entity_map = {entity.api_name: entity for entity in self.entities}
+        return self._entity_map
+
+    def get_entity(self, entity_name: str) -> Entity | None:
+        """Get an entity by name."""
+        return self.__entity_map__().get(entity_name)
+
+    def __getitem__(self, entity_name: str) -> Entity:
+        """Get an entity by name."""
+        entity = self.get_entity(entity_name)
+        if entity:
+            return entity
+        raise ValueError(f"Entity {entity_name} not found in schema")
+
 
 @dataclass
 class Entity:
@@ -81,7 +98,7 @@ class Entity:
 
     _field_map: dict[str, Field] | None = field(init=False, repr=False, default=None)
 
-    def field_map(self) -> dict[str, Field]:
+    def __field_map__(self) -> dict[str, Field]:
         """Get a map of field names to fields."""
         if self._field_map is None:
             self._field_map = {field.api_name: field for field in self.fields}
@@ -89,18 +106,18 @@ class Entity:
 
     def __contains__(self, field_name: str) -> bool:
         """Check if a field is in the entity."""
-        return field_name in self.field_map()
+        return field_name in self.__field_map__()
 
     def __getitem__(self, field_name: str) -> Field:
         """Get a field by name."""
-        field = self.field_map().get(field_name)
+        field = self.__field_map__().get(field_name)
         if field:
             return field
         raise ValueError(f"Field {field_name} not found in entity {self.api_name}")
 
     def get(self, field_name: str) -> Field | None:
         """Get a field by name."""
-        return self.field_map().get(field_name)
+        return self.__field_map__().get(field_name)
 
     def add(self, field: Field) -> None:
         """Add a field to the entity."""
@@ -144,6 +161,9 @@ class Field:
     unique: bool = False
 
     link: OneToManyLink | ManyToManyLink | OneToOneLink | None = None
+
+    # store extra metadata needed for parsing the schema
+    _js_schema: Any | None = field(init=False, repr=False, default=None)
 
     @classmethod
     def from_json(cls, entity: Entity, api_name: str, field_data: dict[str, Any]) -> Field:
@@ -189,4 +209,4 @@ class OneToManyLink:
 @dataclass
 class ManyToManyLink:
     connection_entity: Entity
-    field_to_connection_entity_field: dict[Field, Field]
+    field_to_connection_entity_field: tuple[Field, Field]
