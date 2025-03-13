@@ -85,6 +85,11 @@ class Schema:
             return entity
         raise ValueError(f"Entity {entity_name} not found in schema")
 
+    def add_entity(self, entity: Entity) -> None:
+        """Add an entity to the schema."""
+        self.entities.append(entity)
+        self._entity_map = None
+
 
 @dataclass
 class Entity:
@@ -115,11 +120,26 @@ class Entity:
             return field
         raise ValueError(f"Field {field_name} not found in entity {self.api_name}")
 
-    def get(self, field_name: str) -> Field | None:
+    def get_or_create_field(self, field_name: str, field_type: FieldType) -> Field:
+        """Get a field by name, or create it if it doesn't exist."""
+        field = self.get_field(field_name)
+        if field:
+            return field
+        field = Field(
+            entity=self,
+            api_name=field_name,
+            display_name=field_name,
+            field_type=field_type,
+            metadata={},
+        )
+        self.add_field(field)
+        return field
+
+    def get_field(self, field_name: str) -> Field | None:
         """Get a field by name."""
         return self.__field_map__().get(field_name)
 
-    def add(self, field: Field) -> None:
+    def add_field(self, field: Field) -> None:
         """Add a field to the entity."""
         self.fields.append(field)
         self._field_map = None
@@ -142,7 +162,7 @@ class Entity:
         )
 
         for field_name, field_data in fields.items():
-            entity.add(Field.from_json(entity, field_name, field_data))
+            entity.add_field(Field.from_json(entity, field_name, field_data))
 
         return entity
 
@@ -160,7 +180,7 @@ class Field:
     editable: bool = True
     unique: bool = False
 
-    link: OneToManyLink | ManyToManyLink | OneToOneLink | None = None
+    link: Link | None = None
 
     # store extra metadata needed for parsing the schema
     _js_schema: Any | None = field(init=False, repr=False, default=None)
@@ -191,22 +211,28 @@ class Field:
 
 
 @dataclass
-class OneToOneLink:
-    """A Link to the parent field, on a connection table."""
+class SingleEntityLink:
+    """A field that links to a single other entity."""
 
-    parent: Field
-    child: Field
-
-
-@dataclass
-class OneToManyLink:
-    """A link between two fields."""
-
-    parent: Field
     children: list[Field]
 
 
 @dataclass
-class ManyToManyLink:
+class ReverseOfSingleEntityLink:
+    """A field that pulls it's data from a single entity link field.
+
+    This will return multiple entities, any that match the id on the parent field.
+    """
+
+    parent: Field
+
+
+@dataclass
+class MultiEntityLink:
+    """A field that links to multiple other entities."""
+
     connection_entity: Entity
     field_to_connection_entity_field: tuple[Field, Field]
+
+
+Link = SingleEntityLink | ReverseOfSingleEntityLink | MultiEntityLink

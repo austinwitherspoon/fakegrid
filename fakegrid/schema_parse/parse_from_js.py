@@ -9,21 +9,77 @@ What we know:
 
 """
 
-from fakegrid.schema import Entity, Field, FieldType, ManyToManyLink, OneToManyLink, OneToOneLink, Schema
+from fakegrid.schema import (
+    Entity,
+    Field,
+    FieldType,
+    MultiEntityLink,
+    ReverseOfSingleEntityLink,
+    Schema,
+    SingleEntityLink,
+)
 
 from .js_schema import JsSchema, JsSchemaEntityFieldData
 
 IGNORE_CONNECTION_ENTITIES = {
-    "NoteLink",  # missing reverse fields
-    "Tagging",  # missing reverse fields
-    "NoteTask",  # missing reverse fields
-    "Attachment",  # doesn't exist
-    "AttachmentLink",  # doesn't exist
     "ActionMenuItemProjectConnection",  # doesn't exist
     "ActionMenuItemPermissionConnection",  # doesn't exist
     "ProjectSoftwareConnection",  # doesn't exist
-    "TankActionPermissionRuleSetDenial",
+    "TankActionPermissionRuleSetDenial",  # doesn't exist
 }
+
+IGNORED_FIELD_NAMES = {"open_notes", "sibling_tasks"}
+
+CREATE_TABLES = {"Addressing", "AttachmentLink"}
+
+# Connections we can infer exist by looking at the schema but don't actually exist
+MISSING_CONNECTIONS = {
+    ("Note", "note_links"): ("NoteLink", "note"),
+    ("Task", "notes"): ("NoteTask", "task"),
+    ("Task", "task_assignees"): ("Addressing", "user"),
+    ("Task", "task_reviewers"): ("Addressing", "user"),  # TODO: ???
+    ("*", "notes"): ("NoteLink", "entity"),
+    ("*", "tags"): ("Tagging", "entity"),
+    ("*", "addressings_cc"): ("Addressing", "entity"),
+    ("*", "addressings_to"): ("Addressing", "entity"),  # TODO: ???
+    ("*", "attachments"): ("AttachmentLink", "entity"),
+}
+
+
+# TODO: Version.tasks is unlinked but metadata is there!
+
+# Currently broken:
+# Task:
+#   - sibling_tasks
+# Note:
+#   - replies
+# Version:
+#   - tasks
+# Attachment:
+#   - attachment_reference_links
+#   - attachment_links
+# Ticket:
+#   - replies
+# Revision:
+#   - published_files
+# Delivery:
+#   - replies
+# ActionMenuItem:
+#   - projects
+#   - permissions_groups
+# Software:
+#   - projects
+#   - user_restrictions
+# Composition:
+#   - composition_links
+# PublishEvent:
+#   - publish_event_links
+# Launch:
+#   - tasks
+# TankContainer:
+#   - tank_container_links
+# TankAction:
+#   - deny_permissions
 
 
 def build_fakegrid_schema(raw_schema: JsSchema) -> Schema:
@@ -38,7 +94,7 @@ def build_fakegrid_schema(raw_schema: JsSchema) -> Schema:
             fields=[],
             visible=True,
         )
-        schema.entities.append(entity)
+        schema.add_entity(entity)
 
         for field_name, js_field_data in field_data.items():
             field = Field(
@@ -52,7 +108,18 @@ def build_fakegrid_schema(raw_schema: JsSchema) -> Schema:
                 unique=False,
             )
             field._js_schema = js_field_data
-            entity.fields.append(field)
+            entity.add_field(field)
+
+    for table_name in CREATE_TABLES:
+        if not schema.get_entity(table_name):
+            entity = Entity(
+                schema=schema,
+                api_name=table_name,
+                display_name=table_name,
+                fields=[],
+                visible=True,
+            )
+            schema.add_entity(entity)
 
     resolve_multi_entity_links(schema)
     resolve_single_entity_links(schema)
@@ -66,46 +133,80 @@ def resolve_multi_entity_links(schema: Schema) -> None:
         for field in entity.fields:
             if field.field_type != FieldType.MULTI_ENTITY:
                 continue
+            if field.api_name in IGNORED_FIELD_NAMES:
+                continue
             raw_field_data: JsSchemaEntityFieldData = field._js_schema  # type: ignore
-            if raw_field_data.through_join_field and raw_field_data.through_join_entity_type:
+
+            default_connection = next(
+                (
+                    dest
+                    for source, dest in MISSING_CONNECTIONS.items()
+                    if source[0] in [entity.api_name, "*"] and source[1] == field.api_name
+                ),
+                None,
+            )
+            if (raw_field_data.through_join_field and raw_field_data.through_join_entity_type) or default_connection:
                 if raw_field_data.through_join_entity_type in IGNORE_CONNECTION_ENTITIES:
                     continue
-                connection_entity = schema.get_entity(raw_field_data.through_join_entity_type)
-                assert connection_entity is not None
-                connection_field = next(
-                    (
-                        f
-                        for f in connection_entity.fields
-                        if f._js_schema.inverse_association == f"{entity.api_name}.{field.api_name}"  # type: ignore
-                    ),
-                    None,
+                connection_entity = (
+                    schema.get_entity(raw_field_data.through_join_entity_type)
+                    if raw_field_data.through_join_entity_type
+                    else None
                 )
+                connection_field = (
+                    next(
+                        (
+                            f
+                            for f in connection_entity.fields
+                            if f._js_schema
+                            and f._js_schema.inverse_association == f"{entity.api_name}.{field.api_name}"
+                        ),
+                        None,
+                    )
+                    if connection_entity
+                    else None
+                )
+                if not connection_field and default_connection:
+                    connection_entity_name, connection_field_name = default_connection
+                    connection_entity = schema.get_entity(connection_entity_name)
+                    assert connection_entity is not None
+                    connection_field = connection_entity.get_or_create_field(connection_field_name, FieldType.ENTITY)
+
+                assert connection_entity is not None
                 assert connection_field is not None
-                field.link = ManyToManyLink(connection_entity, (field, connection_field))
+                field.link = MultiEntityLink(connection_entity, (field, connection_field))
 
 
 def resolve_single_entity_links(schema: Schema) -> None:
     """Resolve single-entity links."""
+
     for entity in schema.entities:
         for field in entity.fields:
             if field.field_type != FieldType.ENTITY:
                 continue
-            raw_field_data: JsSchemaEntityFieldData = field._js_schema  # type: ignore
-            if raw_field_data.inverse_association:
+            raw_field_data: JsSchemaEntityFieldData | None = field._js_schema
+            if raw_field_data and raw_field_data.inverse_association:
+                inverse_links = []
                 # string means it's a one to one link
                 if isinstance(raw_field_data.inverse_association, str):
                     inverse_entity_name, inverse_field_name = raw_field_data.inverse_association.split(".")
                     inverse_entity = schema.get_entity(inverse_entity_name)
                     assert inverse_entity is not None
                     inverse_field = inverse_entity[inverse_field_name]
-                    field.link = OneToOneLink(field, inverse_field)
+                    field.link = SingleEntityLink([inverse_field])
+                    inverse_links.append(inverse_field)
                 else:
                     # list means it's a one to many link
                     inverse_links = []
                     for inverse_association in raw_field_data.inverse_association:
+                        # make a link for this association
                         inverse_entity_name, inverse_field_name = inverse_association.split(".")
                         inverse_entity = schema.get_entity(inverse_entity_name)
                         assert inverse_entity is not None
                         inverse_field = inverse_entity[inverse_field_name]
                         inverse_links.append(inverse_field)
-                    field.link = OneToManyLink(field, inverse_links)
+                    field.link = SingleEntityLink(inverse_links)
+
+                # Make links on the inverse fields
+                for inverse_field in inverse_links:
+                    inverse_field.link = ReverseOfSingleEntityLink(field)
