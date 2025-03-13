@@ -9,6 +9,9 @@ What we know:
 
 """
 
+import json
+from pathlib import Path
+
 from fakegrid.schema import (
     Entity,
     Field,
@@ -82,8 +85,13 @@ MISSING_CONNECTIONS = {
 #   - deny_permissions
 
 
-def build_fakegrid_schema(raw_schema: JsSchema) -> Schema:
+def build_fakegrid_schema(raw_schema: JsSchema | Path) -> Schema:
     """Use the raw schema data to build a fakegrid schema."""
+    if isinstance(raw_schema, Path):
+        with raw_schema.open("r") as f:
+            json_data = json.load(f)
+            raw_schema = JsSchema.from_dict(json_data)
+
     schema = Schema(entities=[])
 
     for entity_name, field_data in raw_schema.entity_fields.items():

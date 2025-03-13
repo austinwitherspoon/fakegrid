@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -65,7 +66,7 @@ class BackendComplexFilter:
     """A group of simple filters."""
 
     operator: ComplexFilterOperator
-    filters: list[BackendFilter]
+    filters: Sequence[BackendFilter | BackendComplexFilter]
 
     @classmethod
     def from_filter(cls, base_entity: Entity, filter_: Filter | ComplexFilter) -> BackendComplexFilter:
